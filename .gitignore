@@ -9,6 +9,7 @@ data/
 !.env.example
 *.mp4
 !public/promo.mp4
+!scripts/assets/live-autopilot.mp4
 public/media/
 tmp/
 .DS_Store

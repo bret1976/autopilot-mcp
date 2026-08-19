@@ -108,7 +108,7 @@ Do not put Gemini or PostProxy keys in Railway. Buyers enter those through `setu
 
 ## Video
 
-Hero video is a 45–75s title-card explainer (not a dashboard tour). Render with:
+Hero video intercuts value cards with live Autopilot footage (cockpit, scan, PostProxy, workshop). 45–75s. Render with:
 
 ```bash
 python3 scripts/render_explainer.py

@@ -76,16 +76,17 @@ def test_health_and_landing() -> None:
         assert "Codex" in text
         assert "9:16" in text
         assert 'src="/promo.mp4"' in text
-        assert "not a dashboard tour" in text.lower()
+        assert "Live Autopilot" in text
+        assert "scan" in text.lower()
         for phrase in BANNED:
             assert phrase not in text
             assert phrase not in css
 
 
-def test_promo_is_explainer_not_app_tour() -> None:
+def test_promo_is_hybrid_value_and_live_app() -> None:
     promo = PUBLIC_DIR / "promo.mp4"
     poster = PUBLIC_DIR / "poster.jpg"
-    assert promo.exists() and promo.stat().st_size > 100_000
+    assert promo.exists() and promo.stat().st_size > 400_000
     assert poster.exists() and poster.stat().st_size > 10_000
     probe = subprocess.check_output(
         [

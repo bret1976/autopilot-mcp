@@ -25,6 +25,18 @@ DEFAULT_PLATFORMS = (
     "twitter",
 )
 
+# What a new buyer gets until they change it in setup.
+ONBOARD_PLATFORMS = (
+    "linkedin",
+    "twitter",
+    "instagram",
+    "youtube",
+    "facebook",
+)
+
+DEFAULT_DAILY_HOUR = 8
+DEFAULT_DAILY_TIMEZONE = "America/Los_Angeles"
+
 VERTICAL_PLATFORMS = frozenset({"instagram", "tiktok", "youtube", "facebook"})
 LANDSCAPE_PLATFORMS = frozenset({"linkedin", "twitter", "x"})
 

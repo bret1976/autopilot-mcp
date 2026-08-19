@@ -18,9 +18,10 @@ Owner: Bret Jenny / 6Frame Studio.
 
 1. Fill name + email on `/buy`. The form mints a signed URL (365 days) and shows it immediately. Stripe is optional later.
 2. Paste the URL into the model they already pay for.
-3. Call `setup` with their `GEMINI_API_KEY` and `POSTPROXY_API_KEY`.
-4. Connect socials on **their** PostProxy account (`postproxy_connect`).
-5. `run_autopilot`.
+3. In Claude they say they want TrendPilot / Autopilot for their brand and paste their website. The connector calls `onboard` and **asks for their Gemini key, PostProxy key, profile group, and brand/site before any scan or post**.
+4. `setup` saves those keys (never echoed). `set_brand_from_website` pulls voice from their site. Defaults: LinkedIn, X, Instagram, YouTube, Facebook. Daily run 8:00 AM PT.
+5. `postproxy_connect` returns OAuth links for **their** socials.
+6. `run_autopilot` runs live (`draft=true` first). Mock mode is rejected. No 6Frame stub clips.
 
 ### Claude.ai
 
@@ -46,7 +47,9 @@ Some clients take the same URL plus `Authorization: Bearer SIGNED_TOKEN`.
 
 | Tool | Role |
 | --- | --- |
-| `setup` / `configure` | Save keys and brand. Secrets are never echoed. |
+| `onboard` / `start` | First call. Lists every missing key/brand question. |
+| `setup` / `configure` | Save **their** keys and brand. Secrets are never echoed. |
+| `set_brand_from_website` | Pull voice from the buyer's site. |
 | `postproxy_status` / `postproxy_connect` | Buyer’s PostProxy socials. |
 | `scan_trends` | Gemini-grounded scan of a viral original. |
 | `download_original` | yt-dlp + ffmpeg trim, 9:16 and 16:9 masters. |

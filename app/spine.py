@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from app.config import DEFAULT_BRAND_VOICE, DEFAULT_PLATFORMS, LOCKED_HASHTAGS, MAX_CLIP_SECONDS
+from app.config import DEFAULT_BRAND_VOICE, MAX_CLIP_SECONDS, ONBOARD_PLATFORMS
 from app.gemini import generate_json
 from app.hashtags import apply_hashtags, topic_tags
 from app.media import download_and_cut
@@ -11,11 +11,11 @@ from app.platforms import split_batches, youtube_title
 from app import postproxy
 from app.store import public_config, set_last_run
 
-SCAN_PROMPT = """You are scanning live public web results for viral AI-filmmaking clips.
-
-Find one ORIGINAL clip worth cutting today. Prefer YouTube / TikTok / Instagram
-URLs that a downloader can fetch. Do not invent a new generated film.
+SCAN_PROMPT = """You are scanning live public web results for one ORIGINAL clip this brand can cut today.
+Prefer YouTube / TikTok / Instagram URLs a downloader can fetch.
+Do not invent a new generated film.
 Do not recommend generating Veo, FAL, or Runway footage.
+Do not write as 6Frame Studio unless this brand is 6Frame.
 
 Return JSON only:
 {{
@@ -23,19 +23,23 @@ Return JSON only:
   "source_url": "https://...",
   "platform": "youtube|tiktok|instagram",
   "why": "one sentence on why this cut is moving",
-  "topic_tags": ["Kling", "NightDrive"],
+  "topic_tags": ["TopicOne", "TopicTwo"],
   "suggested_start": 0,
   "suggested_duration": 45,
   "notes": "what to keep in the trim"
 }}
 
-Studio filter: {niche}
+Brand: {brand}
+Website: {website}
+Niche / filter: {niche}
 Voice reminder: {voice}
 """
 
-COPY_PROMPT = """Rewrite social copy for this cut. Stay in the studio voice.
+COPY_PROMPT = """Rewrite social copy for this cut in THIS brand's voice — not 6Frame unless they are 6Frame.
 Never use: game-changer, revolutionize, unlock, next-level, crush, viral hack.
 
+Brand: {brand}
+Website: {website}
 Voice:
 {voice}
 
@@ -78,16 +82,25 @@ async def scan_trends(record: dict[str, Any], niche: str = "", mock: bool = Fals
             "mocked": True,
         }
     voice = record.get("brand_voice") or DEFAULT_BRAND_VOICE
+    brand = record.get("brand_name") or "the buyer's brand"
+    website = record.get("website_url") or ""
+    default_niche = f"content that fits {brand}" + (f" ({website})" if website else "")
     return await generate_json(
         record.get("gemini_api_key") or "",
-        SCAN_PROMPT.format(niche=niche or "AI filmmaking, cinematic shorts", voice=voice),
+        SCAN_PROMPT.format(
+            niche=niche or default_niche,
+            voice=voice,
+            brand=brand,
+            website=website,
+        ),
         grounded=True,
     )
 
 
 async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = False) -> dict[str, Any]:
-    platforms = record.get("platforms") or list(DEFAULT_PLATFORMS)
+    platforms = record.get("platforms") or list(ONBOARD_PLATFORMS)
     extras = topic_tags(scan.get("topic_tags") or [])
+    locked = tuple(record.get("brand_hashtags") or ())
     if mock:
         raw = {
             "title": scan.get("title") or "Studio cut",
@@ -106,10 +119,12 @@ async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = 
             record.get("gemini_api_key") or "",
             COPY_PROMPT.format(
                 voice=record.get("brand_voice") or DEFAULT_BRAND_VOICE,
+                brand=record.get("brand_name") or "the buyer's brand",
+                website=record.get("website_url") or "",
                 title=scan.get("title") or "",
                 why=scan.get("why") or "",
                 notes=scan.get("notes") or "",
-                tags=", ".join(extras) or "AI filmmaking",
+                tags=", ".join(extras) or (record.get("brand_name") or "the brand"),
             ),
             grounded=False,
         )
@@ -117,12 +132,12 @@ async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = 
     captions: dict[str, str] = {}
     for platform in platforms:
         body = (raw.get("captions") or {}).get(platform) or raw.get("title") or ""
-        captions[platform] = apply_hashtags(platform, body, extras)
+        captions[platform] = apply_hashtags(platform, body, extras, locked=locked)
     return {
         "title": raw.get("title") or scan.get("title") or "Studio cut",
         "youtube_title": youtube_title(raw.get("title") or scan.get("title") or "Studio cut"),
         "topic_tags": extras,
-        "locked_hashtags": list(LOCKED_HASHTAGS),
+        "locked_hashtags": list(locked),
         "captions": captions,
     }
 
@@ -135,7 +150,7 @@ async def publish_cut(
     mock: bool = False,
     draft: bool = False,
 ) -> dict[str, Any]:
-    platforms = record.get("platforms") or list(DEFAULT_PLATFORMS)
+    platforms = record.get("platforms") or list(ONBOARD_PLATFORMS)
     batches = split_batches(platforms)
     if mock:
         return {

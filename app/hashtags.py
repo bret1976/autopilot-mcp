@@ -36,7 +36,11 @@ def topic_tags(tags: list[str] | tuple[str, ...] | None) -> list[str]:
     return out
 
 
-def hashtags_for(platform: str, extra: list[str] | tuple[str, ...] | None = None) -> list[str]:
+def hashtags_for(
+    platform: str,
+    extra: list[str] | tuple[str, ...] | None = None,
+    locked: tuple[str, ...] | list[str] | None = None,
+) -> list[str]:
     key = platform.strip().lower()
     if key == "x":
         key = "twitter"
@@ -44,19 +48,20 @@ def hashtags_for(platform: str, extra: list[str] | tuple[str, ...] | None = None
         raise ValueError(f"No hashtag cap for platform: {platform}")
     lo, hi = HASHTAG_CAPS[key]
     extras = topic_tags(extra)
+    locked_tags = list(LOCKED_HASHTAGS if locked is None else locked)
 
     if key == "twitter":
         # X: 1–2 tags, last tweet stays under 280. Prefer studio mark, then a topic.
         chosen = extras[:1]
-        if not chosen:
-            chosen = [LOCKED_HASHTAGS[0]]
+        if not chosen and locked_tags:
+            chosen = [locked_tags[0]]
         if hi >= 2 and extras[1:]:
             chosen.append(extras[1])
-        elif hi >= 2 and len(chosen) < 2:
-            chosen.append(LOCKED_HASHTAGS[1])
+        elif hi >= 2 and len(chosen) < 2 and len(locked_tags) > 1:
+            chosen.append(locked_tags[1])
         return chosen[:hi]
 
-    tags = list(LOCKED_HASHTAGS)
+    tags = list(locked_tags)
     for tag in extras:
         if tag not in tags:
             tags.append(tag)
@@ -74,8 +79,9 @@ def apply_hashtags(
     extra: list[str] | tuple[str, ...] | None = None,
     *,
     twitter_limit: int = 280,
+    locked: tuple[str, ...] | list[str] | None = None,
 ) -> str:
-    tags = hashtags_for(platform, extra)
+    tags = hashtags_for(platform, extra, locked=locked)
     tag_line = " ".join(tags)
     text = (body or "").rstrip()
     key = platform.strip().lower()

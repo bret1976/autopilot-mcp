@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.config import DEFAULT_BRAND_VOICE, DEFAULT_PLATFORMS, data_dir
+from app.config import (
+    DEFAULT_DAILY_HOUR,
+    DEFAULT_DAILY_TIMEZONE,
+    ONBOARD_PLATFORMS,
+    data_dir,
+)
 from app.platforms import normalize_platforms
 from app.tokens import mint_token
 
@@ -57,8 +62,13 @@ def ensure_buyer(
         "gemini_api_key": "",
         "postproxy_api_key": "",
         "postproxy_profile_group_id": "",
-        "brand_voice": DEFAULT_BRAND_VOICE,
-        "platforms": list(DEFAULT_PLATFORMS),
+        "brand_name": "",
+        "website_url": "",
+        "brand_voice": "",
+        "brand_hashtags": [],
+        "platforms": list(ONBOARD_PLATFORMS),
+        "daily_run_hour": DEFAULT_DAILY_HOUR,
+        "daily_run_timezone": DEFAULT_DAILY_TIMEZONE,
         "public_base_url": "",
         "last_run": None,
     }
@@ -88,8 +98,23 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         if key == "platforms":
             record[key] = normalize_platforms(value if isinstance(value, list) else [value])
             continue
+        if key == "brand_hashtags":
+            if isinstance(value, str):
+                value = [part.strip() for part in value.replace(",", " ").split() if part.strip()]
+            record[key] = [str(tag) for tag in (value or []) if str(tag).strip()]
+            continue
+        if key == "daily_run_hour":
+            try:
+                hour = int(value)
+            except (TypeError, ValueError):
+                continue
+            record[key] = max(0, min(hour, 23))
+            continue
         if key in {
             "brand_voice",
+            "brand_name",
+            "website_url",
+            "daily_run_timezone",
             "postproxy_profile_group_id",
             "public_base_url",
             "email",
@@ -106,16 +131,26 @@ def set_last_run(buyer_id: str, last_run: dict[str, Any]) -> dict[str, Any]:
 
 
 def public_config(record: dict[str, Any]) -> dict[str, Any]:
+    from app.onboard import readiness
+
+    report = readiness(record)
     return {
         "buyer_id": record.get("buyer_id"),
         "email": record.get("email") or None,
-        "brand_voice": record.get("brand_voice") or DEFAULT_BRAND_VOICE,
-        "platforms": record.get("platforms") or list(DEFAULT_PLATFORMS),
+        "brand_name": record.get("brand_name") or None,
+        "website_url": record.get("website_url") or None,
+        "brand_voice": record.get("brand_voice") or None,
+        "brand_hashtags": record.get("brand_hashtags") or [],
+        "platforms": record.get("platforms") or list(ONBOARD_PLATFORMS),
+        "daily_run_hour": record.get("daily_run_hour") or DEFAULT_DAILY_HOUR,
+        "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
         "public_base_url": record.get("public_base_url") or None,
         "postproxy_profile_group_id": record.get("postproxy_profile_group_id") or None,
         "gemini_key": _mask(record.get("gemini_api_key")),
         "postproxy_key": _mask(record.get("postproxy_api_key")),
-        "configured": bool(record.get("gemini_api_key") and record.get("postproxy_api_key")),
+        "configured": report["ready"],
+        "ready": report["ready"],
+        "missing": report["missing"],
         "updated_at": record.get("updated_at"),
         "last_run": record.get("last_run"),
     }

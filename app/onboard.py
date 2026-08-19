@@ -1,0 +1,205 @@
+from __future__ import annotations
+
+import re
+from typing import Any
+from urllib.parse import urlparse
+
+import httpx
+
+from app.config import (
+    DEFAULT_DAILY_HOUR,
+    DEFAULT_DAILY_TIMEZONE,
+    ONBOARD_PLATFORMS,
+)
+from app.hashtags import normalize_tag
+
+_TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+_META = re.compile(
+    r'<meta[^>]+(?:name|property)=["\']([^"\']+)["\'][^>]+content=["\']([^"\']+)["\']',
+    re.I,
+)
+_META_FLIP = re.compile(
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\']([^"\']+)["\']',
+    re.I,
+)
+
+
+def hashtags_from_name(name: str) -> list[str]:
+    words = re.findall(r"[A-Za-z0-9]+", name or "")
+    if not words:
+        return []
+    compact = normalize_tag("".join(words[:4]))
+    return [compact] if compact else []
+
+
+def missing_fields(record: dict[str, Any]) -> list[dict[str, str]]:
+    missing: list[dict[str, str]] = []
+    if not str(record.get("gemini_api_key") or "").strip():
+        missing.append(
+            {
+                "id": "gemini_api_key",
+                "prompt": "Paste your Gemini API key (https://aistudio.google.com/apikey).",
+                "why": "Required to scan live trends and write your brand's copy. Without it, TrendPilot will not run.",
+            }
+        )
+    if not str(record.get("postproxy_api_key") or "").strip():
+        missing.append(
+            {
+                "id": "postproxy_api_key",
+                "prompt": "Paste your PostProxy API key (https://postproxy.dev).",
+                "why": "Required to post through YOUR socials. We never use a shared PostProxy account.",
+            }
+        )
+    if not str(record.get("postproxy_profile_group_id") or "").strip():
+        missing.append(
+            {
+                "id": "postproxy_profile_group_id",
+                "prompt": "Paste your PostProxy profile group id.",
+                "why": "Needed so OAuth connects LinkedIn / X / Instagram / YouTube / Facebook on your group.",
+            }
+        )
+    if not (
+        str(record.get("brand_name") or "").strip()
+        or str(record.get("website_url") or "").strip()
+        or str(record.get("brand_voice") or "").strip()
+    ):
+        missing.append(
+            {
+                "id": "website_url",
+                "prompt": "What is the brand, and what is the website? Example: IAN Group — https://iangroup.ai",
+                "why": "Copy is written in THEIR voice from the site. We do not default to 6Frame.",
+            }
+        )
+    return missing
+
+
+def readiness(record: dict[str, Any]) -> dict[str, Any]:
+    missing = missing_fields(record)
+    can_scan = not any(item["id"] == "gemini_api_key" for item in missing)
+    can_publish = not any(
+        item["id"] in {"postproxy_api_key", "postproxy_profile_group_id"} for item in missing
+    )
+    has_brand = not any(item["id"] == "website_url" for item in missing)
+    ready = can_scan and can_publish and has_brand
+    ask = [
+        f"{i}. {item['prompt']} — {item['why']}" for i, item in enumerate(missing, start=1)
+    ]
+    if missing:
+        say = (
+            "TrendPilot / Autopilot is connected, but it is not ready to scan or post. "
+            "I will not mock, and I will not use 6Frame stub clips. "
+            "Before anything runs, I need YOUR keys and brand:\n\n"
+            + "\n".join(ask)
+            + "\n\nPaste those here. I will save them with setup (keys are never printed back), "
+            "then send OAuth links so you can connect each network on your PostProxy account. "
+            f"Default platforms: {', '.join(ONBOARD_PLATFORMS)}. "
+            f"Daily run defaults to {DEFAULT_DAILY_HOUR:02d}:00 {DEFAULT_DAILY_TIMEZONE} (8:00 AM PT)."
+        )
+    else:
+        say = (
+            "Keys and brand are in. Next I will send PostProxy OAuth links for each platform "
+            "you want live. After you finish those, say Run Autopilot — first cut is a draft "
+            "so you can check it, then we publish live."
+        )
+    return {
+        "ready": ready,
+        "can_scan": can_scan,
+        "can_publish": can_publish,
+        "has_brand": has_brand,
+        "missing": [item["id"] for item in missing],
+        "ask_the_user": missing,
+        "say_to_user": say,
+        "next_after_keys": [
+            "Call postproxy_connect for linkedin, twitter, instagram, youtube, facebook.",
+            "Open each returned URL and finish OAuth on the buyer's own accounts.",
+            "Call run_autopilot with draft=true for the first live cut.",
+        ],
+        "defaults": {
+            "platforms": list(record.get("platforms") or ONBOARD_PLATFORMS),
+            "daily_run_hour": record.get("daily_run_hour") or DEFAULT_DAILY_HOUR,
+            "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
+        },
+    }
+
+
+def blocked(record: dict[str, Any], *, need: str = "run") -> dict[str, Any] | None:
+    report = readiness(record)
+    if need == "scan" and report["can_scan"]:
+        return None
+    if need == "publish" and report["can_publish"]:
+        return None
+    if need == "run" and report["ready"]:
+        return None
+    return {
+        "ok": False,
+        "needs_setup": True,
+        "mocked": False,
+        "ask_the_user": report["ask_the_user"],
+        "say_to_user": report["say_to_user"],
+        "missing": report["missing"],
+        "defaults": report["defaults"],
+        "next_after_keys": report["next_after_keys"],
+    }
+
+
+def _meta_map(html: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for key, value in _META.findall(html):
+        found[key.lower()] = value.strip()
+    for value, key in _META_FLIP.findall(html):
+        found.setdefault(key.lower(), value.strip())
+    return found
+
+
+def normalize_website(url: str) -> str:
+    text = (url or "").strip()
+    if not text:
+        return ""
+    if not re.match(r"^https?://", text, re.I):
+        text = "https://" + text
+    parsed = urlparse(text)
+    if not parsed.netloc:
+        return ""
+    return text
+
+
+async def fetch_brand_from_website(url: str) -> dict[str, Any]:
+    website = normalize_website(url)
+    if not website:
+        return {"ok": False, "error": "A real website URL is required."}
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            response = await client.get(
+                website,
+                headers={"User-Agent": "TrendPilot-MCP/1.0"},
+            )
+        html = response.text[:200_000]
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"Could not fetch {website}: {exc}", "website_url": website}
+
+    meta = _meta_map(html)
+    title_match = _TITLE.search(html)
+    title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else ""
+    site = meta.get("og:site_name") or meta.get("application-name") or ""
+    description = (
+        meta.get("og:description")
+        or meta.get("description")
+        or meta.get("twitter:description")
+        or ""
+    )
+    brand_name = site or (title.split("|")[0].split("—")[0].split("-")[0].strip() if title else "")
+    voice = (
+        f"Write as {brand_name or 'this brand'}. "
+        f"Site: {website}. "
+        f"{description or title or 'Match the tone of the public homepage — no generic growth-desk voice.'} "
+        "Do not write as 6Frame Studio unless this brand is 6Frame."
+    )
+    return {
+        "ok": True,
+        "website_url": website,
+        "brand_name": brand_name,
+        "page_title": title,
+        "description": description,
+        "brand_voice": voice[:1200],
+        "brand_hashtags": hashtags_from_name(brand_name),
+    }

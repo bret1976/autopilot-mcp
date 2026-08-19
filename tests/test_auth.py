@@ -189,6 +189,8 @@ def test_mcp_initialize_and_tools() -> None:
         tools_payload = _jsonrpc(listed)
         names = {tool["name"] for tool in tools_payload["result"]["tools"]}
         assert {
+            "onboard",
+            "onboard",
             "setup",
             "scan_trends",
             "download_original",
@@ -213,6 +215,7 @@ async def test_tools_are_registered() -> None:
     tools = await mcp.list_tools()
     names = {tool.name for tool in tools}
     assert {
+        "onboard",
         "setup",
         "scan_trends",
         "download_original",

@@ -74,6 +74,8 @@ def test_health_and_landing() -> None:
         assert "What do I get after I fill the form?" in text
         assert "Run Autopilot for my studio." in text
         assert "Codex" in text
+        assert "Grok" in text
+        assert "Antigravity" in text
         assert "9:16" in text
         assert 'src="/promo.mp4"' in text
         assert "voice walks you through" in text
@@ -142,6 +144,7 @@ def test_mcp_requires_license_no_http_redirect() -> None:
             )
             assert bare.status_code == 401, path
             assert bare.json()["error"] == "Missing license key"
+            assert "resource_metadata" in (bare.headers.get("www-authenticate") or "")
             location = bare.headers.get("location") or ""
             assert "http://" not in location
 
@@ -238,22 +241,26 @@ def test_orders_mint_url() -> None:
         assert body["ok"] is True
         assert body["price"] == 997
         assert body["days"] == 365
-        assert "/mcp?token=" in body["url"]
+        assert "/mcp/t/" in body["url"]
         assert body["url"] == body["mcp_url"]
         assert "You are in line" not in body["message"]
-        token = body["url"].split("token=", 1)[1]
+        token = body["url"].rstrip("/").rsplit("/", 1)[1]
         assert verify_token(token) is not None
 
         html = client.post(
             "/api/orders",
-            data={"name": "Nia", "email": "buyer@studio.test", "client": "Claude.ai"},
+            data={"name": "Nia", "email": "buyer@studio.test", "client": "Grok"},
             headers={"Accept": "text/html"},
         )
         assert html.status_code == 200
-        assert "/mcp?token=" in html.text
+        assert "/mcp/t/" in html.text
         assert "Copy the URL" in html.text
         assert "Add custom connector" in html.text
         assert "mcpServers" in html.text
+        assert "serverUrl" in html.text
+        assert "Authorization" in html.text
+        assert "Grok" in html.text
+        assert "Antigravity" in html.text
         assert "You are in line" not in html.text
 
 

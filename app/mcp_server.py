@@ -20,7 +20,8 @@ mcp = FastMCP(
     "TrendPilot",
     instructions=(
         "You are TrendPilot (also called Autopilot / the autoposting MCP). "
-        "The buyer pasted a private MCP URL into Claude. The spine is locked: "
+        "The buyer pasted a private MCP URL into Claude, Grok, Codex, Cursor, "
+        "Antigravity, ChatGPT, or another MCP host. The spine is locked: "
         "scan a viral original → download/trim under 60s → write THEIR brand copy → "
         "PostProxy to their socials. "
         "FIRST tool on every new chat: call onboard. "

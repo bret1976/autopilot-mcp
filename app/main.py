@@ -26,9 +26,16 @@ from app.config import (
     public_base_url,
     stripe_payment_link,
 )
-from app.http_util import HttpsLocationMiddleware, NormalizeMcpPathMiddleware
+from app.http_util import (
+    AcceptCompatMiddleware,
+    HttpsLocationMiddleware,
+    NormalizeMcpPathMiddleware,
+    TokenPathMiddleware,
+    WellKnownRewriteMiddleware,
+)
 from app.mcp_server import bind_buyer, buyer_from_request, mcp
 from app.media import buyer_media_dir, verify_media
+from app.oauth import router as oauth_router, www_authenticate
 from app.orders import fulfill_order
 from app.store import ensure_buyer, list_buyers, list_leads
 from app.tokens import clean_buyer_id, mint_token
@@ -42,11 +49,16 @@ mcp_app.router.redirect_slashes = False
 
 class LicenseGate(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if request.method == "OPTIONS":
+        path = request.url.path
+        if request.method == "OPTIONS" or "well-known" in path:
             return await call_next(request)
         buyer_id = buyer_from_request(request)
         if not buyer_id:
-            return JSONResponse({"error": "Missing license key"}, status_code=401)
+            return JSONResponse(
+                {"error": "Missing license key"},
+                status_code=401,
+                headers={"WWW-Authenticate": www_authenticate(request)},
+            )
         bind_buyer(buyer_id)
         request.state.buyer_id = buyer_id
         return await call_next(request)
@@ -63,10 +75,21 @@ mcp_app.add_middleware(
 
 app = FastAPI(title=PRODUCT_NAME, lifespan=mcp_app.lifespan, redirect_slashes=False)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+app.include_router(oauth_router)
 app.mount("/assets", StaticFiles(directory=str(PUBLIC_DIR)), name="assets")
 app.mount("/mcp", mcp_app)
 app.add_middleware(HttpsLocationMiddleware)
+app.add_middleware(AcceptCompatMiddleware)
 app.add_middleware(NormalizeMcpPathMiddleware)
+app.add_middleware(TokenPathMiddleware)
+app.add_middleware(WellKnownRewriteMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"],
+    allow_headers=["*"],
+    expose_headers=["Mcp-Session-Id", "mcp-session-id", "WWW-Authenticate"],
+)
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 
@@ -143,6 +166,7 @@ async def create_order(request: Request):
                 submitted=True,
                 order=fulfilled["order"],
                 mcp_url=fulfilled["url"],
+                mcp_token=fulfilled["token"],
                 payment_link=stripe_payment_link() or None,
             ),
         )
@@ -211,7 +235,7 @@ async def admin_mint(
     slug = clean_buyer_id(buyer.split("@", 1)[0])
     token = mint_token(slug, days=days)
     record = ensure_buyer(slug, email=email, note=note, token=token)
-    url = f"{public_base_url()}/mcp?token={record['token']}"
+    url = f"{public_base_url()}/mcp/t/{record['token']}"
     return templates.TemplateResponse(
         request,
         "admin.html",

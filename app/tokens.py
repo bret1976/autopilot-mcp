@@ -68,6 +68,24 @@ def verify_token(token: str | None) -> BuyerToken | None:
     return BuyerToken(buyer_id=buyer_id, issued_at=int(ts_raw), expires_at=exp, raw=token)
 
 
+def token_from_paste(raw: str | None) -> str | None:
+    """Pull a license token out of a pasted MCP URL, Bearer header, or raw token."""
+    if not raw:
+        return None
+    text = raw.strip().strip('"').strip("'")
+    if not text:
+        return None
+    lower = text.lower()
+    if lower.startswith("bearer ") or lower.startswith("token "):
+        text = text.split(None, 1)[1].strip()
+    if "token=" in text:
+        text = text.split("token=", 1)[1]
+    elif "/mcp/t/" in text:
+        text = text.split("/mcp/t/", 1)[1]
+    text = text.split("&", 1)[0].split("/", 1)[0].split("#", 1)[0].split("?", 1)[0]
+    return text.strip() or None
+
+
 def extract_token(request: Request) -> str | None:
     auth = request.headers.get("authorization") or request.headers.get("Authorization")
     if auth:
@@ -76,10 +94,14 @@ def extract_token(request: Request) -> str | None:
             return parts[1].strip()
         if len(parts) == 1:
             return parts[0].strip()
-    header_token = request.headers.get("x-mcp-token") or request.headers.get("x-buyer-token")
+    header_token = (
+        request.headers.get("x-mcp-token")
+        or request.headers.get("x-buyer-token")
+        or request.headers.get("x-api-key")
+    )
     if header_token:
         return header_token.strip()
-    return (
+    return token_from_paste(
         request.query_params.get("token")
         or request.query_params.get("access_token")
         or request.query_params.get("key")

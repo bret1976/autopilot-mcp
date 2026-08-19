@@ -11,7 +11,7 @@
   <div class="shell buy">
     <p class="kicker"><a href="/" style="color:inherit;text-decoration:none">← Autopilot</a></p>
     <h1>Get the link · ${{ price }} once</h1>
-    <p class="lede">Name and email unlock a private MCP URL. Paste it into Claude, Cursor, or Codex. Stripe is optional later — this form is how you get the link today.</p>
+    <p class="lede">Name and email unlock a private MCP URL. Paste it into Claude, Grok, Codex, Cursor, Antigravity, or ChatGPT. Stripe is optional later — this form is how you get the link today.</p>
 
     {% if submitted and mcp_url %}
     <div class="ok">
@@ -25,22 +25,37 @@
     </div>
 
     <div class="card install">
-      <p class="kicker">Install — Claude</p>
+      <p class="kicker">Claude · Grok · ChatGPT</p>
       <ol>
-        <li>Open Claude → Settings → Connectors → Add custom connector.</li>
+        <li>Open Connectors → Add custom connector (Grok: grok.com/connectors → New Connector → Custom).</li>
         <li>Paste the URL above. Name it <strong style="color:var(--ink)">6Frame Autopilot</strong>.</li>
+        <li>If the host asks you to sign in, paste this same URL on our connect page. That is your license — not a new password.</li>
         <li>Say you want TrendPilot for your brand and paste your website. It will ask for <em>your</em> Gemini key, PostProxy key, and profile group before it scans or posts.</li>
-        <li>Connect each network on the OAuth links it returns. First run is a draft. Then live.</li>
       </ol>
-      <p class="kicker">Cursor / Codex — one line</p>
+      <p class="kicker">Cursor / Codex</p>
       <pre>{
   "mcpServers": {
     "6frame-autopilot": {
-      "url": "{{ mcp_url }}"
+      "url": "{{ mcp_url }}",
+      "headers": {
+        "Authorization": "Bearer {{ mcp_token }}"
+      }
     }
   }
 }</pre>
-      <p class="fine">Some clients also take <code>Authorization: Bearer</code> plus the token in the URL. Prefer streamable HTTP. Do not add a trailing-slash rewrite that drops the token.</p>
+      <p class="kicker">Google Antigravity</p>
+      <p class="fine">Antigravity uses <code>serverUrl</code>, not <code>url</code>. File: <code>~/.gemini/antigravity/mcp_config.json</code></p>
+      <pre>{
+  "mcpServers": {
+    "6frame-autopilot": {
+      "serverUrl": "{{ mcp_url }}",
+      "headers": {
+        "Authorization": "Bearer {{ mcp_token }}"
+      }
+    }
+  }
+}</pre>
+      <p class="fine">The path after <code>/mcp/t/</code> is the license. Some hosts strip <code>?token=</code>; this URL keeps it. Prefer streamable HTTP. Do not add a trailing-slash rewrite that drops the token.</p>
     </div>
     <p class="fine"><a href="/">Back to 6Frame Autopilot</a></p>
     <script>
@@ -74,9 +89,11 @@
       <select id="client" name="client" required>
         <option value="Claude.ai">Claude.ai</option>
         <option value="Claude Code">Claude Code</option>
+        <option value="Grok">Grok</option>
         <option value="ChatGPT">ChatGPT</option>
         <option value="Cursor">Cursor</option>
         <option value="Codex">Codex</option>
+        <option value="Antigravity">Google Antigravity</option>
         <option value="Not sure">Not sure</option>
       </select>
 

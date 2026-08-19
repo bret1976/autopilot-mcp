@@ -16,14 +16,23 @@ def buyer_id_from_email(email: str) -> str:
     return clean_buyer_id(f"{local}-at-{domain}")
 
 
-def mcp_public_url(token: str, request: Request | None = None) -> str:
+def _public_base(request: Request | None = None) -> str:
     base = public_base_url().rstrip("/")
     if request is not None:
         proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https")
         proto = proto.split(",")[0].strip()
         if proto == "https" and base.startswith("http://"):
             base = "https://" + base[len("http://") :]
-    return f"{base}/mcp?token={token}"
+    return base
+
+
+def mcp_public_url(token: str, request: Request | None = None) -> str:
+    """Path token survives hosts (Grok) that strip ?query secrets."""
+    return f"{_public_base(request)}/mcp/t/{token}"
+
+
+def mcp_query_url(token: str, request: Request | None = None) -> str:
+    return f"{_public_base(request)}/mcp?token={token}"
 
 
 def fulfill_order(

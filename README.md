@@ -1,6 +1,6 @@
 # 6Frame Autopilot MCP
 
-A sellable MCP: buyers paste one private URL into Claude, Claude Code, Cursor, ChatGPT, or Codex. They enter **their** Gemini and PostProxy keys. Autopilot runs the locked spine:
+A sellable MCP: buyers paste one private URL into Claude, Grok, Codex, Cursor, Google Antigravity, ChatGPT, or Claude Code. They enter **their** Gemini and PostProxy keys. Autopilot runs the locked spine:
 
 scan a viral AI-filmmaking original → download it → trim under 60s → write 6Frame-voice copy with hashtags → PostProxy publishes.
 
@@ -23,11 +23,15 @@ Owner: Bret Jenny / 6Frame Studio.
 5. `postproxy_connect` returns OAuth links for **their** socials.
 6. `run_autopilot` runs live (`draft=true` first). Mock mode is rejected. No 6Frame stub clips.
 
-### Claude.ai
+The minted URL is path-based so hosts that strip `?token=` (Grok custom connectors) still send the license:
 
-Settings → Connectors → Add custom connector → paste:
+`https://YOUR-HOST/mcp/t/SIGNED_TOKEN`
 
-`https://YOUR-HOST/mcp?token=SIGNED_TOKEN`
+`/mcp?token=SIGNED_TOKEN` still works. Unauthenticated `/mcp` returns `401` with `WWW-Authenticate` and OAuth discovery so Grok/Claude/ChatGPT can complete a license sign-in instead of dying on “Connection failed.”
+
+### Claude.ai / Grok / ChatGPT
+
+Settings → Connectors → Add custom connector (Grok: grok.com/connectors → New Connector → Custom) → paste the path URL. If the host asks you to sign in, paste the same URL on the connect page.
 
 ### Claude Code / Cursor / Codex `mcp.json`
 
@@ -35,13 +39,31 @@ Settings → Connectors → Add custom connector → paste:
 {
   "mcpServers": {
     "6frame-autopilot": {
-      "url": "https://YOUR-HOST/mcp?token=SIGNED_TOKEN"
+      "url": "https://YOUR-HOST/mcp/t/SIGNED_TOKEN",
+      "headers": {
+        "Authorization": "Bearer SIGNED_TOKEN"
+      }
     }
   }
 }
 ```
 
-Some clients take the same URL plus `Authorization: Bearer SIGNED_TOKEN`.
+### Google Antigravity
+
+Antigravity uses `serverUrl` (not `url`) in `~/.gemini/antigravity/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "6frame-autopilot": {
+      "serverUrl": "https://YOUR-HOST/mcp/t/SIGNED_TOKEN",
+      "headers": {
+        "Authorization": "Bearer SIGNED_TOKEN"
+      }
+    }
+  }
+}
+```
 
 ## Tools
 
@@ -81,7 +103,7 @@ MCP_ISSUER_SECRET=… PUBLIC_BASE_URL=https://your-host \
   python -m app.mint --email buyer@studio.com --buyer-id north-light
 ```
 
-Or open `/admin`, enter `ADMIN_SECRET`, set buyer + days valid, Generate link. `/buy` already mints and displays the URL. Unauthenticated `/mcp` and `/mcp/` return `401 Missing license key` over HTTPS with no redirect to `http://`.
+Or open `/admin`, enter `ADMIN_SECRET`, set buyer + days valid, Generate link. `/buy` already mints and displays the URL. Unauthenticated `/mcp` and `/mcp/` return `401 Missing license key` over HTTPS with no redirect to `http://`. JSON-only `Accept` headers (Grok) get JSON, not a 406.
 
 ## Run locally
 

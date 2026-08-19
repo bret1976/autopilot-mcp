@@ -11,7 +11,7 @@ def mint(email: str, buyer_id: str = "", note: str = "", days: int = 0) -> dict[
     slug = clean_buyer_id(buyer_id or email.split("@", 1)[0])
     token = mint_token(slug, days=days)
     record = ensure_buyer(slug, email=email, note=note, token=token)
-    url = f"{public_base_url()}/mcp?token={record['token']}"
+    url = f"{public_base_url()}/mcp/t/{record['token']}"
     return {"buyer_id": slug, "email": email, "url": url, "price": str(PRICE_USD), "days": str(days)}
 
 

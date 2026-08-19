@@ -10,7 +10,7 @@ YouTube titles include `#Shorts`.
 
 Buyers work inside the LLM they already pay for. They paste one URL. They do not learn a 6Frame app.
 
-**Price: `$297` once** — set in `app/config.py` as `PRICE_USD`. Landing, `/buy`, and `/admin` all read that constant.
+**Price: `$997` once** — set in `app/config.py` as `PRICE_USD`. Landing, `/buy`, and `/admin` all read that constant.
 
 Owner: Bret Jenny / 6Frame Studio.
 
@@ -108,4 +108,9 @@ Do not put Gemini or PostProxy keys in Railway. Buyers enter those through `setu
 
 ## Video
 
-`scripts/render_promo.py` builds the 60s letterboxed explainer into `public/promo.mp4`. The YouTube theory clip Bret sent is a footnote on the landing, not the hero.
+Hero video is a **real screen walkthrough** of live Autopilot (`marketing-automation-production-dbd5.up.railway.app`). Drop the finished cut on:
+
+- `public/promo.mp4`
+- `public/poster.jpg` (first frame or a still from the same recording)
+
+Do not replace those with title cards, talking-head, or stock B-roll. The YouTube theory clip is a footnote on the landing, not the hero.

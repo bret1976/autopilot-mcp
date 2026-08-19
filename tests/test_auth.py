@@ -25,19 +25,19 @@ BANNED = (
     "Austin",
     "all-in-one platform",
     "start a free trial",
-    "$997",
+    "$297",
 )
 
 
-def test_price_is_297() -> None:
-    assert PRICE_USD == 297
+def test_price_is_997() -> None:
+    assert PRICE_USD == 997
 
 
 def test_health_and_landing() -> None:
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["price"] == 297
+        assert health.json()["price"] == 997
         page = client.get("/")
         assert page.status_code == 200
         text = page.text
@@ -47,9 +47,9 @@ def test_health_and_landing() -> None:
         assert "--bg:#0c0f0d" in css
         assert "--gold:#c4a574" in css
         assert "border-radius:999px" in css
-        assert "$297" in text
-        assert "Get the link · $297 once" in text
-        assert "Get access · $297" in text
+        assert "$997" in text
+        assert "Get the link · $997 once" in text
+        assert "Get access · $997" in text
         assert "What you are actually buying" in text
         assert "Three steps. No install. No new app." in text
         assert "Run Autopilot for my studio." in text
@@ -57,8 +57,19 @@ def test_health_and_landing() -> None:
         assert "9:16" in text
         assert "People are not going to work via softwares anymore" in text
         assert "not a dashboard" in text.lower()
+        assert 'src="/promo.mp4"' in text
+        assert 'poster="/poster.jpg"' in text
         for phrase in BANNED:
             assert phrase not in text
+
+
+def test_promo_slot_exists() -> None:
+    from pathlib import Path
+
+    from app.config import PUBLIC_DIR
+
+    assert (PUBLIC_DIR / "promo.mp4").exists()
+    assert (PUBLIC_DIR / "poster.jpg").exists()
 
 
 def test_buy_form() -> None:
@@ -134,4 +145,4 @@ def test_orders_endpoint() -> None:
         )
         assert res.status_code == 200
         assert "You are in line" in res.json()["message"]
-        assert res.json()["price"] == 297
+        assert res.json()["price"] == 997

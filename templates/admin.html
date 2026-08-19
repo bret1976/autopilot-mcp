@@ -4,43 +4,54 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Seller desk — 6Frame Autopilot</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap"/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,500&family=Manrope:wght@400;500;600&display=swap"/>
   <link rel="stylesheet" href="/assets/page.css"/>
 </head>
 <body>
   <div class="shell buy">
     <p class="kicker">Seller desk</p>
-    <h1 style="font-size:56px;margin:8px 0">Mint a signed URL</h1>
-    <p class="lede">One link per buyer. Revoke with <code>REVOKED_KEYS</code>.</p>
+    <h1>Mint a signed MCP URL</h1>
+    <p class="lede">Each customer gets one signed link. Buyers who fill <code>/buy</code> are minted automatically. Revoke with <code>REVOKED_KEYS</code>.</p>
+
     {% if not authorized %}
-    <form method="post" action="/admin/login">
+    <form class="card" method="post" action="/admin/login">
       <label for="password">Password</label>
       <input id="password" name="password" type="password" required/>
-      <button class="plate" type="submit" style="margin-top:18px">Open desk</button>
+      <button class="btn" type="submit">Open desk</button>
+      <p class="fine">Uses <code>ADMIN_SECRET</code>. No card is charged here.</p>
     </form>
     {% else %}
       {% if minted %}
       <div class="ok">
-        <p>{{ minted.buyer }} · ${{ minted.price }} · days {{ minted.days }}</p>
+        <p>Send this URL to {{ minted.email or minted.buyer }}. ${{ minted.price }} once. Days valid: {{ minted.days }}.</p>
         <pre>{{ minted.url }}</pre>
       </div>
       {% endif %}
-      <form method="post" action="/admin/mint">
+      <form class="card" method="post" action="/admin/mint">
         <label for="buyer">Buyer (email or slug)</label>
-        <input id="buyer" name="buyer" required/>
-        <label for="days">Days valid (0 = none)</label>
+        <input id="buyer" name="buyer" type="text" required placeholder="studio@example.com"/>
+        <label for="days">Days valid (0 = no expiry)</label>
         <input id="days" name="days" type="number" min="0" value="365"/>
         <label for="note">Note</label>
-        <input id="note" name="note"/>
-        <button class="plate" type="submit" style="margin-top:18px">Generate link</button>
+        <input id="note" name="note" type="text" placeholder="invoice #"/>
+        <button class="btn" type="submit">Generate link</button>
       </form>
-      <h2 style="margin-top:36px">Orders</h2>
+      <h2>Orders</h2>
       <table>
         <tr><th>When</th><th>Name</th><th>Email</th><th>Client</th></tr>
         {% for order in orders %}
         <tr><td>{{ order.created_at }}</td><td>{{ order.name }}</td><td>{{ order.email }}</td><td>{{ order.client }}</td></tr>
         {% else %}
         <tr><td colspan="4">None yet.</td></tr>
+        {% endfor %}
+      </table>
+      <h2>Buyers</h2>
+      <table>
+        <tr><th>Id</th><th>Email</th><th>Configured</th></tr>
+        {% for b in buyers %}
+        <tr><td>{{ b.buyer_id }}</td><td>{{ b.email }}</td><td>{{ b.configured }}</td></tr>
+        {% else %}
+        <tr><td colspan="3">None minted.</td></tr>
         {% endfor %}
       </table>
     {% endif %}

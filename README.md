@@ -16,7 +16,7 @@ Owner: Bret Jenny / 6Frame Studio.
 
 ## What a buyer does
 
-1. Pay. Bret mints a signed URL (`/admin` or the command below).
+1. Fill name + email on `/buy`. The form mints a signed URL (365 days) and shows it immediately. Stripe is optional later.
 2. Paste the URL into the model they already pay for.
 3. Call `setup` with their `GEMINI_API_KEY` and `POSTPROXY_API_KEY`.
 4. Connect socials on **their** PostProxy account (`postproxy_connect`).
@@ -78,7 +78,7 @@ MCP_ISSUER_SECRET=… PUBLIC_BASE_URL=https://your-host \
   python -m app.mint --email buyer@studio.com --buyer-id north-light
 ```
 
-Or open `/admin`, enter `ADMIN_SECRET`, set buyer + days valid, Generate link. After a `/buy` order, send the URL by hand. Unauthenticated `/mcp` returns `401 Missing license key`.
+Or open `/admin`, enter `ADMIN_SECRET`, set buyer + days valid, Generate link. `/buy` already mints and displays the URL. Unauthenticated `/mcp` and `/mcp/` return `401 Missing license key` over HTTPS with no redirect to `http://`.
 
 ## Run locally
 
@@ -108,9 +108,10 @@ Do not put Gemini or PostProxy keys in Railway. Buyers enter those through `setu
 
 ## Video
 
-Hero video is a **real screen walkthrough** of live Autopilot (`marketing-automation-production-dbd5.up.railway.app`). Drop the finished cut on:
+Hero video is a 45–75s title-card explainer (not a dashboard tour). Render with:
 
-- `public/promo.mp4`
-- `public/poster.jpg` (first frame or a still from the same recording)
+```bash
+python3 scripts/render_explainer.py
+```
 
-Do not replace those with title cards, talking-head, or stock B-roll. The YouTube theory clip is a footnote on the landing, not the hero.
+Outputs `public/promo.mp4` and `public/poster.jpg`. The YouTube theory clip is a footnote on the landing, not the hero.

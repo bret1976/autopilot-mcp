@@ -8,6 +8,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.cors import CORSMiddleware
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.config import (
     CTA_ACCESS,
@@ -24,15 +26,18 @@ from app.config import (
     public_base_url,
     stripe_payment_link,
 )
+from app.http_util import HttpsLocationMiddleware, NormalizeMcpPathMiddleware
 from app.mcp_server import bind_buyer, buyer_from_request, mcp
 from app.media import buyer_media_dir, verify_media
-from app.store import append_lead, ensure_buyer, list_buyers, list_leads
+from app.orders import fulfill_order
+from app.store import ensure_buyer, list_buyers, list_leads
 from app.tokens import clean_buyer_id, mint_token
 
 PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
 TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 
-mcp_app = mcp.http_app(path="/", stateless_http=True)
+mcp_app = mcp.http_app(path="/", stateless_http=True, transport="streamable-http")
+mcp_app.router.redirect_slashes = False
 
 
 class LicenseGate(BaseHTTPMiddleware):
@@ -48,11 +53,21 @@ class LicenseGate(BaseHTTPMiddleware):
 
 
 mcp_app.add_middleware(LicenseGate)
+mcp_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["Mcp-Session-Id", "mcp-session-id"],
+)
 
-app = FastAPI(title=PRODUCT_NAME, lifespan=mcp_app.lifespan)
+app = FastAPI(title=PRODUCT_NAME, lifespan=mcp_app.lifespan, redirect_slashes=False)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.mount("/assets", StaticFiles(directory=str(PUBLIC_DIR)), name="assets")
 app.mount("/mcp", mcp_app)
+app.add_middleware(HttpsLocationMiddleware)
+app.add_middleware(NormalizeMcpPathMiddleware)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 
 def _ctx(request: Request, **extra):
@@ -107,27 +122,38 @@ async def create_order(request: Request):
     body = await _read_body(request)
     email = str(body.get("email") or "").strip()
     name = str(body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="A name is required.")
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="A real email is required.")
-    order = append_lead(
-        {
-            "name": name,
-            "email": email,
-            "client": str(body.get("client") or "").strip(),
-            "studio": str(body.get("studio") or "").strip(),
-            "source": str(body.get("source") or "buy"),
-        }
+    fulfilled = fulfill_order(
+        name=name,
+        email=email,
+        client=str(body.get("client") or "").strip(),
+        studio=str(body.get("studio") or "").strip(),
+        source=str(body.get("source") or "buy"),
+        request=request,
     )
     if _wants_html(request):
         return templates.TemplateResponse(
             request,
             "buy.html",
-            _ctx(request, submitted=True, order=order, payment_link=stripe_payment_link() or None),
+            _ctx(
+                request,
+                submitted=True,
+                order=fulfilled["order"],
+                mcp_url=fulfilled["url"],
+                payment_link=stripe_payment_link() or None,
+            ),
         )
     return {
         "ok": True,
-        "message": "You are in line. Signed MCP link after payment.",
-        "order_id": order["id"],
+        "message": fulfilled["message"],
+        "url": fulfilled["url"],
+        "mcp_url": fulfilled["url"],
+        "order_id": fulfilled["order_id"],
+        "buyer_id": fulfilled["buyer_id"],
+        "days": fulfilled["days"],
         "price": PRICE_USD,
     }
 

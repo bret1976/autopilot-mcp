@@ -6,7 +6,9 @@ from pathlib import Path
 # Single source of truth. Landing, /buy, /admin, and CTAs read this.
 PRICE_USD = 297
 PRICE_LABEL = f"${PRICE_USD} once"
-CTA_LABEL = f"Get the MCP link · ${PRICE_USD}"
+CTA_LABEL = f"Get the link · ${PRICE_USD} once"
+CTA_ACCESS = f"Get access · ${PRICE_USD}"
+CTA_PRICE = f"Get your MCP link · ${PRICE_USD}"
 
 PRODUCT_NAME = "6Frame Autopilot"
 STUDIO_NAME = "6Frame Studio"
@@ -91,3 +93,10 @@ def stripe_payment_link() -> str:
 
 def stripe_secret_key() -> str:
     return _env("STRIPE_SECRET_KEY")
+
+
+def revoked_keys() -> set[str]:
+    raw = _env("REVOKED_KEYS")
+    if not raw:
+        return set()
+    return {part.strip() for part in raw.split(",") if part.strip()}

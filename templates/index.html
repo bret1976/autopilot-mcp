@@ -3,270 +3,168 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>6Frame Autopilot — buy access to the workflow. Run it in Claude.</title>
-  <meta name="description" content="People are not going to work via softwares anymore. Paste one MCP URL into the model you already pay for. Dump the job in. Branded posts come back out. $297 once."/>
-  <meta property="og:title" content="6Frame Autopilot MCP"/>
-  <meta property="og:description" content="They are not buying a tool. They are buying access to the locked Autopilot workflow. $297 once."/>
+  <title>6Frame Autopilot MCP — Run the daily social cut inside Claude</title>
+  <meta name="description" content="Paste one MCP link into Claude, Claude Code, Cursor, ChatGPT, or Codex. Buy access to the locked Autopilot workflow — not a dashboard. $297 once."/>
+  <link rel="canonical" href="{{ request.base_url }}"/>
+  <meta property="og:title" content="6Frame Autopilot — one MCP link, your studio"/>
+  <meta property="og:description" content="A $297 workflow you run inside the AI you already pay for. Not a dashboard. Not a login."/>
   <meta property="og:image" content="/assets/og.jpg"/>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-  <style>
-    :root{
-      --void:#050505;
-      --panel:#0c0c0c;
-      --ink:#dcdad6;
-      --silver:#b8b6b1;
-      --mute:#7c7a75;
-      --gel:#d46a2c;
-      --hair:#1c1c1c;
-    }
-    *{box-sizing:border-box}
-    html,body{margin:0;background:var(--void);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif}
-    body::before{
-      content:"";position:fixed;inset:0;pointer-events:none;z-index:80;opacity:.09;
-      background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-    }
-    a{color:var(--ink)}
-    .shell{width:min(1080px,92%);margin:0 auto}
-    .bar{
-      position:sticky;top:0;z-index:40;
-      display:flex;justify-content:space-between;align-items:center;
-      padding:10px 28px;border-bottom:1px solid var(--hair);
-      background:rgba(5,5,5,.88);backdrop-filter:blur(10px);
-      font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--silver);
-    }
-    .mark{display:flex;gap:10px;align-items:baseline}
-    .mark b{font-family:"Bebas Neue",sans-serif;font-size:22px;letter-spacing:.08em;font-weight:400;color:var(--ink)}
-    .mark span{color:var(--gel)}
-    .bar nav{display:flex;gap:22px;align-items:center}
-    .bar a{color:var(--mute);text-decoration:none}
-    .bar a:hover{color:var(--ink)}
-    .plate{
-      display:inline-block;border:1px solid var(--ink);color:var(--ink);text-decoration:none;
-      padding:11px 16px;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
-    }
-    .plate:hover{background:var(--ink);color:var(--void)}
-    .hero{padding:48px 0 12px}
-    .kicker{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--gel);margin:0 0 12px}
-    h1{
-      font-family:"Bebas Neue",sans-serif;font-weight:400;font-size:clamp(52px,9vw,108px);
-      line-height:.86;letter-spacing:.01em;margin:0 0 18px;color:var(--ink);
-    }
-    h1 i{font-style:normal;color:var(--silver)}
-    .lede{max-width:640px;color:var(--silver);font-size:17px;line-height:1.65}
-    .actions{display:flex;gap:18px;align-items:center;margin-top:22px;flex-wrap:wrap}
-    .ghost{color:var(--mute);text-decoration:none;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase}
-    .reel{margin:36px auto 0;border:1px solid var(--hair);background:#000;position:relative}
-    .reel::before,.reel::after{content:"";position:absolute;left:0;right:0;height:28px;background:#000;z-index:2;pointer-events:none}
-    .reel::before{top:0}
-    .reel::after{bottom:36px}
-    .reel video{width:100%;display:block;aspect-ratio:2.39/1;object-fit:cover;background:#000}
-    .reel-cap{padding:10px 14px;color:var(--mute);font-size:12px;border-top:1px solid var(--hair);font-family:"IBM Plex Mono",monospace;letter-spacing:.04em}
-    .strip{
-      display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--hair);
-      border:1px solid var(--hair);margin:40px auto 0;
-    }
-    .strip div{background:var(--void);padding:18px 16px}
-    .strip b{display:block;font-family:"Bebas Neue",sans-serif;font-size:32px;letter-spacing:.04em;font-weight:400}
-    .strip span{color:var(--mute);font-size:13px;line-height:1.4}
-    .buywhat,.how,.custom,.price-block,.faq{padding:64px 0 0}
-    h2{font-family:"Bebas Neue",sans-serif;font-weight:400;font-size:clamp(36px,5vw,64px);letter-spacing:.02em;margin:0 0 14px}
-    .grid2{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:start}
-    .checks{list-style:none;padding:0;margin:0}
-    .checks li{padding:12px 0 12px 22px;border-bottom:1px solid var(--hair);position:relative;color:var(--silver)}
-    .checks li:before{content:"▸";position:absolute;left:0;color:var(--gel)}
-    .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--hair);border:1px solid var(--hair);margin-top:22px}
-    .steps article{background:var(--void);padding:22px}
-    .num{font-family:"Bebas Neue",sans-serif;font-size:36px;color:var(--gel);letter-spacing:.08em}
-    .steps h3{margin:6px 0;font-family:"Bebas Neue",sans-serif;font-size:28px;font-weight:400;letter-spacing:.03em}
-    .steps p{color:var(--mute);margin:0;line-height:1.55}
-    .slate{border:1px solid var(--hair);background:var(--panel);padding:22px}
-    pre{margin:0;white-space:pre-wrap;font-family:"IBM Plex Mono",monospace;font-size:13px;line-height:1.65;color:var(--ink)}
-    .split-proof{display:grid;grid-template-columns:160px 1fr;gap:14px;margin-top:22px}
-    .phone{aspect-ratio:9/16;border:1px solid #2a2a2a;overflow:hidden;position:relative}
-    .phone img,.wide img{width:100%;height:100%;object-fit:cover}
-    .wide{aspect-ratio:16/9;border:1px solid #2a2a2a;overflow:hidden;position:relative}
-    .tag{
-      position:absolute;left:6px;bottom:6px;font-family:"IBM Plex Mono",monospace;
-      font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#fff;background:rgba(0,0,0,.55);padding:3px 5px;
-    }
-    .price-block h2{font-size:clamp(80px,16vw,168px);line-height:.8}
-    .price-block h2 span{display:block;font-size:20px;letter-spacing:.22em;color:var(--mute);font-family:"IBM Plex Mono",monospace}
-    .faq article{border-top:1px solid var(--hair);padding:16px 0}
-    .faq h3{margin:0 0 8px;font-size:16px;font-weight:500}
-    .faq p{margin:0;color:var(--mute);line-height:1.6}
-    footer{
-      margin-top:72px;padding:28px 0 60px;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;
-      border-top:1px solid var(--hair);color:var(--mute);font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
-    }
-    footer a{color:var(--mute)}
-    @media (max-width:820px){
-      .grid2,.steps,.strip,.split-proof{grid-template-columns:1fr}
-      .bar nav a:not(.plate){display:none}
-    }
-  </style>
+  <meta property="og:image:width" content="1200"/>
+  <meta property="og:image:height" content="630"/>
+  <meta property="og:type" content="website"/>
+  <meta name="twitter:card" content="summary_large_image"/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Manrope:wght@400;500;600;700&display=swap"/>
+  <link rel="stylesheet" href="/assets/page.css"/>
 </head>
 <body>
-  <header class="bar">
-    <div class="mark"><b>6FRAME</b><span>Autopilot</span></div>
-    <nav>
-      <a href="#how">How</a>
+  <header class="shell nav">
+    <div class="brand">6Frame Autopilot <span>MCP</span></div>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
       <a href="#customize">Customize</a>
-      <a href="#price">{{ price_label }}</a>
-      <a class="plate" href="/buy">{{ cta }}</a>
-    </nav>
+      <a href="#price">Pricing</a>
+      <a class="btn" href="/buy">{{ access_cta }}</a>
+    </div>
   </header>
 
-  <section class="shell hero">
-    <p class="kicker">One link. Your model. Your studio.</p>
-    <h1>Buy the Autopilot workflow.<i> Run it inside the AI you already pay for.</i></h1>
-    <p class="lede">
-      People are not going to work via softwares anymore. Your buyer already lives in Claude.
-      Open Autopilot to MCP — a private URL they paste into the model they already pay for — and they use it there, effortlessly.
-      They are not buying a tool or a UI. They are buying access to the infrastructure: the locked workflow that scans the viral original, trims it, writes the copy, and posts.
-    </p>
-    <div class="actions">
-      <a class="plate" href="/buy">{{ cta }}</a>
-      <a class="ghost" href="#watch">Watch 75 seconds</a>
-    </div>
-  </section>
+  <main>
+    <section class="shell hero">
+      <p class="kicker">One link. Your model. Your studio.</p>
+      <h1>Buy the Autopilot workflow.<em> Run it inside the AI you already pay for.</em></h1>
+      <p class="lede">
+        People are not going to work via softwares anymore. 6Frame Autopilot is not a dashboard and not a login.
+        It is a private MCP URL. Paste it into Claude, Claude Code, Cursor, ChatGPT, or Codex.
+        They are not buying a tool or a UI. They are buying access to the infrastructure — the locked workflow that scans a viral AI-filmmaking original, trims it under 60s, writes 6Frame-voice copy, and posts through PostProxy.
+      </p>
+      <div class="hero-actions">
+        <a class="btn" href="/buy">{{ cta }}</a>
+        <a class="ghost" href="#watch">Watch 60 seconds</a>
+      </div>
+      <p class="fine">Not renting a seat. $297 once. Use it in Claude effortlessly. Screw the feature list — dump the job in, branded posts pop back out.</p>
+    </section>
 
-  <section id="watch" class="shell">
-    <div class="reel">
-      <video controls playsinline preload="metadata" poster="/poster.jpg" src="/promo.mp4">
-        Your browser cannot play this video.
-      </video>
-      <p class="reel-cap">This product only. Paste the link. Run Autopilot. No account tour.</p>
-    </div>
-  </section>
+    <section id="watch" class="shell">
+      <div class="video-frame">
+        <video controls playsinline preload="metadata" poster="/poster.jpg" src="/promo.mp4">
+          Your browser cannot play this video.
+        </video>
+      </div>
+      <p class="caption">Paste the MCP URL into Claude. Type Run Autopilot. Scan, trim, hashtags, PostProxy. No account tour.</p>
+    </section>
 
-  <section class="shell">
-    <div class="strip">
-      <div><b>1 URL</b><span>Paste into Claude, Cursor, or Codex</span></div>
-      <div><b>8 tools</b><span>The locked Autopilot spine</span></div>
-      <div><b>Daily</b><span>Dump the job in. Branded posts out.</span></div>
-      <div><b>${{ price }}</b><span>Once. Access — not time.</span></div>
-    </div>
-  </section>
+    <section class="shell strip">
+      <div><b>1 URL</b><span>Paste into Claude, ChatGPT, Cursor, or Codex</span></div>
+      <div><b>8 tools</b><span>Scan, cut, copy, hashtags, publish</span></div>
+      <div><b>Daily Autopilot</b><span>Dump the job in. Branded posts out.</span></div>
+      <div><b>$297</b><span>Once. Access to the workflow — not time.</span></div>
+    </section>
 
-  <section class="shell buywhat">
-    <div class="grid2">
+    <section class="shell grid2">
       <div>
         <p class="kicker">What you are actually buying</p>
-        <h2>Access to a locked workflow.</h2>
+        <h2>Access to a locked workflow — not a login you outgrow.</h2>
         <p class="lede">
-          Screw the dashboard. Screw the feature list. They prefer something custom to them over something made for thousands of people.
-          Sell the result, not the hours. Lock “good” into a repeatable process.
+          They prefer something custom to them over something made for thousands of people.
+          Sell the result, not time. Lock “good” into a repeatable process. The spine is locked. The voice is theirs.
         </p>
       </div>
       <ul class="checks">
         <li>Scan a viral AI-filmmaking original — do not generate a new clip</li>
-        <li>Download it. Trim it under 60 seconds</li>
-        <li>Rewrite in 6Frame voice with the locked hashtags</li>
-        <li>PostProxy publishes: 9:16 for IG / TikTok / Shorts / Facebook; 16:9 for LinkedIn and X</li>
+        <li>Download the original and trim it under 60 seconds</li>
+        <li>Rewrite in 6Frame voice with guaranteed hashtags</li>
+        <li>9:16 for Instagram, TikTok, YouTube Shorts, Facebook</li>
+        <li>16:9 landscape only for LinkedIn and Twitter/X</li>
+        <li>PostProxy publishes through their own socials and keys</li>
       </ul>
-    </div>
-    <div class="split-proof">
-      <figure class="phone">
-        <img src="/assets/hero-9x16.jpg" alt="9:16 Shorts master"/>
-        <figcaption class="tag">9:16 Shorts</figcaption>
-      </figure>
-      <figure class="wide">
-        <img src="/assets/hero-16x9.jpg" alt="16:9 landscape master"/>
-        <figcaption class="tag">16:9 LinkedIn / X</figcaption>
-      </figure>
-    </div>
-  </section>
+    </section>
 
-  <section class="shell how" id="how">
-    <p class="kicker">Ease of use</p>
-    <h2>Three steps. No install. No new app.</h2>
-    <div class="steps">
-      <article>
-        <div class="num">01</div>
-        <h3>Paste the URL</h3>
-        <p>Claude → Settings → Connectors. Or one line in Claude Code, Cursor, or Codex. Use it in Claude effortlessly.</p>
-      </article>
-      <article>
-        <div class="num">02</div>
-        <h3>Connect your keys</h3>
-        <p>Their Gemini. Their PostProxy. Tell the model the brand. The spine stays locked.</p>
-      </article>
-      <article>
-        <div class="num">03</div>
-        <h3>Run Autopilot</h3>
-        <p>Dump the job in. Branded posts pop back out — scan, trim, hashtags, publish.</p>
-      </article>
-    </div>
-  </section>
+    <section id="how" class="shell">
+      <p class="kicker">Ease of use</p>
+      <h2>Three steps. No install. No new app.</h2>
+      <div class="steps">
+        <article class="card">
+          <div class="num">1</div>
+          <h3>Paste the URL</h3>
+          <p>Claude → Settings → Connectors → Add custom connector. Or one line in Claude Code / Cursor / Codex.</p>
+        </article>
+        <article class="card">
+          <div class="num">2</div>
+          <h3>Connect your keys</h3>
+          <p>Their Gemini. Their PostProxy. Tell the model the brand. The workflow stays locked.</p>
+        </article>
+        <article class="card">
+          <div class="num">3</div>
+          <h3>Run Autopilot</h3>
+          <p>Dump the job in. Branded posts pop back out — scan, trim, hashtags, publish.</p>
+        </article>
+      </div>
+    </section>
 
-  <section class="shell custom" id="customize">
-    <div class="grid2">
+    <section id="customize" class="shell grid2">
       <div>
         <p class="kicker">Custom to them</p>
-        <h2>Same spine. Their studio.</h2>
+        <h2>The workflow is ours. The studio is yours.</h2>
         <p class="lede">
-          The workflow is the lock-in. Voice, platforms, niche — they talk to their model.
-          They can DIY the whole thing. They won’t, if the workflow is one paste away.
+          They can DIY. They won’t, if the workflow is one paste away.
+          Voice, platforms, niche filters — talk to the model they already pay for.
         </p>
       </div>
-      <div class="slate">
+      <div class="card codey">
         <p class="kicker">Say this after you connect</p>
         <pre>Run Autopilot for my studio.
 Brand voice: [theirs]
 Platforms: Instagram, TikTok, YouTube Shorts, Facebook.
 Connect PostProxy and use my Gemini key.</pre>
+        <p class="muted">Same tools. Their constraints. That is the point of selling a workflow through MCP.</p>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="shell price-block" id="price">
-    <p class="kicker">Price</p>
-    <h2>${{ price }} <span>once</span></h2>
-    <p class="lede">
-      You are buying access to the infrastructure — the Autopilot workflow — not time on a clock.
-      Private signed MCP URL. Works in Claude, ChatGPT MCP, Claude Code, Cursor, and Codex.
-    </p>
-    <ul class="checks">
-      <li>Private signed MCP URL</li>
-      <li>The locked spine: scan → cut → write → post</li>
-      <li>Works in the model they already pay for</li>
-    </ul>
-    <p style="margin-top:22px"><a class="plate" href="/buy">{{ cta }}</a></p>
-  </section>
+    <section id="price" class="shell price">
+      <p class="kicker">Price</p>
+      <h2>${{ price }} <span>once</span></h2>
+      <p class="lede">You are not renting a seat. You are buying access to the infrastructure. The first month of a social operator costs more than this.</p>
+      <ul class="checks">
+        <li>Private signed MCP URL (yours to revoke)</li>
+        <li>The locked spine — scan, cut, write, post</li>
+        <li>Works in Claude, ChatGPT MCP, Claude Code, Cursor, and Codex</li>
+        <li>They bring Gemini + PostProxy. You sell the result, not time</li>
+      </ul>
+      <a class="btn big" href="/buy">{{ price_cta }}</a>
+      <p class="fine">One payment. No trial. After the form we send payment instructions — no card is charged on this page.</p>
+    </section>
 
-  <section class="shell faq" id="notes">
-    <h2>Questions</h2>
-    <article>
-      <h3>Do I work inside 6Frame?</h3>
-      <p>No. You paste a private URL into Claude — or Cursor, Codex, ChatGPT — and type your studio. That is the whole onboarding.</p>
-    </article>
-    <article>
-      <h3>Which models?</h3>
-      <p>Any client that can add a remote MCP URL. Claude.ai custom connectors, Claude Code, Cursor, ChatGPT with MCP, and Codex. You pick the model. We do not lock you to ours.</p>
-    </article>
-    <article>
-      <h3>Can I change the brand?</h3>
-      <p>Yes. The locked part is the spine. Voice, platforms, and niche filters are conversation with your model — custom to you, not a template made for thousands of people.</p>
-    </article>
-    <article>
-      <h3>What keys do I bring?</h3>
-      <p>Your Gemini key (gemini-3.1-pro-preview or gemini-3.6-flash) and your PostProxy key. Socials stay on your PostProxy account.</p>
-    </article>
-    <article>
-      <h3>What do I get after I pay?</h3>
-      <p>A private signed MCP URL. Bret sends it. You paste it once. Then: connect your keys, run Autopilot. No trial. Access.</p>
-    </article>
-    <article>
-      <h3>Why a link instead of another app?</h3>
-      <p>Time, skill, and pretty interfaces are free now. What you can still sell is access to a specialized workflow. <a href="{{ theory_url }}" target="_blank" rel="noreferrer">Optional footnote on that shift</a> — not the hero.</p>
-    </article>
-  </section>
+    <section class="shell faq">
+      <h2>Questions</h2>
+      <details>
+        <summary>Do I need a 6Frame app?</summary>
+        <p>No. People are not going to work via softwares anymore. Paste a private URL into Claude. That is the whole install.</p>
+      </details>
+      <details>
+        <summary>Which models work?</summary>
+        <p>Any client that can add a remote MCP URL. Claude.ai custom connectors, Claude Code, Cursor, ChatGPT with MCP, and Codex. You pick the model. We do not lock you to ours.</p>
+      </details>
+      <details>
+        <summary>Can I change the brand?</summary>
+        <p>Yes. The locked part is the spine (scan → download → trim → write → post). Voice, platforms, and niche are yours — custom to you, not a template made for thousands of people.</p>
+      </details>
+      <details>
+        <summary>What keys do I bring?</summary>
+        <p>Your Gemini key (gemini-3.1-pro-preview or gemini-3.6-flash) and your PostProxy key. Socials stay on your PostProxy account.</p>
+      </details>
+      <details>
+        <summary>What do I get after I pay?</summary>
+        <p>A private signed MCP URL. Paste it once into Claude → Settings → Connectors → Add custom connector. Then type your studio.</p>
+      </details>
+      <details>
+        <summary>Why a link instead of another app?</summary>
+        <p>Time, skill, and pretty interfaces are free now. What you can still sell is access to a specialized workflow. <a href="{{ theory_url }}" target="_blank" rel="noreferrer">Optional footnote on that shift</a> — not the hero.</p>
+      </details>
+    </section>
+  </main>
 
-  <footer class="shell">
-    <div>{{ studio }} · Autopilot MCP · {{ price_label }}</div>
-    <div><a href="/buy">{{ cta }}</a></div>
+  <footer class="shell foot">
+    <div>6Frame Autopilot MCP · ${{ price }} once · <a href="/buy">Get access</a></div>
+    <div><a href="/admin">Seller desk</a></div>
   </footer>
 </body>
 </html>

@@ -8,15 +8,18 @@ from dataclasses import dataclass
 
 from starlette.requests import Request
 
-from app.config import issuer_secret
+from app.config import issuer_secret, revoked_keys
 
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{2,80}\.[0-9]{8,16}\.[a-f0-9]{32}$")
+_TOKEN_RE = re.compile(
+    r"^[A-Za-z0-9_-]{2,80}\.[0-9]{8,16}(?:\.[0-9]{1,16})?\.[a-f0-9]{32}$"
+)
 
 
 @dataclass(frozen=True)
 class BuyerToken:
     buyer_id: str
     issued_at: int
+    expires_at: int
     raw: str
 
 
@@ -27,26 +30,42 @@ def clean_buyer_id(buyer_id: str) -> str:
     return cleaned[:80]
 
 
-def mint_token(buyer_id: str, issued_at: int | None = None) -> str:
+def mint_token(buyer_id: str, issued_at: int | None = None, days: int = 0) -> str:
     buyer_id = clean_buyer_id(buyer_id)
     ts = int(issued_at or time.time())
-    msg = f"{buyer_id}.{ts}"
+    exp = 0 if int(days or 0) <= 0 else ts + int(days) * 86400
+    msg = f"{buyer_id}.{ts}.{exp}"
     sig = hmac.new(issuer_secret().encode(), msg.encode(), hashlib.sha256).hexdigest()[:32]
-    return f"{buyer_id}.{ts}.{sig}"
+    return f"{buyer_id}.{ts}.{exp}.{sig}"
 
 
 def verify_token(token: str | None) -> BuyerToken | None:
     if not token:
         return None
     token = token.strip()
+    if token in revoked_keys():
+        return None
     if not _TOKEN_RE.match(token):
         return None
-    buyer_id, ts_raw, sig = token.split(".")
-    msg = f"{buyer_id}.{ts_raw}"
+    parts = token.split(".")
+    if len(parts) == 3:
+        buyer_id, ts_raw, sig = parts
+        exp = 0
+        msg = f"{buyer_id}.{ts_raw}"
+    elif len(parts) == 4:
+        buyer_id, ts_raw, exp_raw, sig = parts
+        exp = int(exp_raw)
+        msg = f"{buyer_id}.{ts_raw}.{exp}"
+    else:
+        return None
+    if buyer_id in revoked_keys():
+        return None
     expected = hmac.new(issuer_secret().encode(), msg.encode(), hashlib.sha256).hexdigest()[:32]
     if not hmac.compare_digest(sig, expected):
         return None
-    return BuyerToken(buyer_id=buyer_id, issued_at=int(ts_raw), raw=token)
+    if exp and exp < int(time.time()):
+        return None
+    return BuyerToken(buyer_id=buyer_id, issued_at=int(ts_raw), expires_at=exp, raw=token)
 
 
 def extract_token(request: Request) -> str | None:
@@ -63,6 +82,6 @@ def extract_token(request: Request) -> str | None:
     return (
         request.query_params.get("token")
         or request.query_params.get("access_token")
+        or request.query_params.get("key")
         or request.path_params.get("token")
     )
-

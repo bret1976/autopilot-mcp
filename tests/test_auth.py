@@ -5,6 +5,7 @@ import os
 os.environ.setdefault("MCP_ISSUER_SECRET", "test-issuer-secret")
 os.environ.setdefault("ADMIN_SECRET", "test-admin")
 os.environ.setdefault("DATA_DIR", "/tmp/autopilot-mcp-tests")
+os.environ["REVOKED_KEYS"] = "revoked-studio"
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,10 +18,13 @@ from app.tokens import mint_token, verify_token
 BANNED = (
     "Becker",
     "Hyros",
+    "Realtor OS",
+    "HighLevel",
+    "GoHighLevel",
+    "Zillow",
+    "Austin",
     "all-in-one platform",
     "start a free trial",
-    "free trial",
-    "Cormorant",
     "$997",
 )
 
@@ -37,22 +41,43 @@ def test_health_and_landing() -> None:
         page = client.get("/")
         assert page.status_code == 200
         text = page.text
+        assert "Cormorant+Garamond" in text
+        assert "Manrope" in text
+        css = client.get("/assets/page.css").text
+        assert "--bg:#0c0f0d" in css
+        assert "--gold:#c4a574" in css
+        assert "border-radius:999px" in css
         assert "$297" in text
-        assert "Get the MCP link" in text
+        assert "Get the link · $297 once" in text
+        assert "Get access · $297" in text
         assert "What you are actually buying" in text
         assert "Three steps. No install. No new app." in text
         assert "Run Autopilot for my studio." in text
+        assert "Codex" in text
         assert "9:16" in text
         assert "People are not going to work via softwares anymore" in text
+        assert "not a dashboard" in text.lower()
         for phrase in BANNED:
             assert phrase not in text
+
+
+def test_buy_form() -> None:
+    with TestClient(app) as client:
+        page = client.get("/buy")
+        assert page.status_code == 200
+        assert "Checkout" in page.text
+        assert 'name="name"' in page.text
+        assert 'name="email"' in page.text
+        assert 'name="client"' in page.text
+        assert "Codex" in page.text
+        assert "No card is charged on this page" in page.text
 
 
 def test_mcp_requires_license() -> None:
     with TestClient(app) as client:
         bare = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
         assert bare.status_code == 401
-        assert bare.json()["error"] == "license required"
+        assert bare.json()["error"] == "Missing license key"
 
 
 def test_mcp_accepts_signed_token() -> None:
@@ -61,6 +86,7 @@ def test_mcp_accepts_signed_token() -> None:
     with TestClient(app) as client:
         res = client.post(
             f"/mcp?token={token}",
+            headers={"Authorization": f"Bearer {token}"},
             json={
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -73,6 +99,14 @@ def test_mcp_accepts_signed_token() -> None:
             },
         )
         assert res.status_code != 401
+
+
+def test_revoked_and_expired_tokens() -> None:
+    assert verify_token(mint_token("revoked-studio")) is None
+    dead = mint_token("old-studio", issued_at=1_700_000_000, days=1)
+    assert verify_token(dead) is None
+    live = mint_token("live-studio", days=30)
+    assert verify_token(live) is not None
 
 
 @pytest.mark.asyncio
@@ -92,9 +126,12 @@ async def test_tools_are_registered() -> None:
     }.issubset(names)
 
 
-def test_lead_endpoint() -> None:
+def test_orders_endpoint() -> None:
     with TestClient(app) as client:
-        res = client.post("/api/leads", json={"email": "buyer@studio.test", "studio": "North Light"})
+        res = client.post(
+            "/api/orders",
+            json={"name": "Nia", "email": "buyer@studio.test", "client": "Codex", "studio": "North Light"},
+        )
         assert res.status_code == 200
-        assert "Bret will send your private MCP URL" in res.json()["message"]
+        assert "You are in line" in res.json()["message"]
         assert res.json()["price"] == 297

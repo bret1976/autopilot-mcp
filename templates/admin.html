@@ -3,59 +3,53 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Mint desk — 6Frame Autopilot</title>
-  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
-  <style>
-    :root{--void:#050505;--ink:#dcdad6;--mute:#7c7a75;--gel:#d46a2c;--hair:#1c1c1c}
-    body{margin:0;background:var(--void);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif}
-    .wrap{width:min(880px,92%);margin:0 auto;padding:40px 0 80px}
-    h1{font-family:"Bebas Neue",sans-serif;font-weight:400;font-size:56px;margin:8px 0}
-    .kicker{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gel)}
-    label{display:block;margin:14px 0 6px;color:var(--mute);font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase}
-    input{width:100%;background:#0c0c0c;border:1px solid var(--hair);color:var(--ink);padding:10px}
-    button{margin-top:16px;border:1px solid var(--ink);background:none;color:var(--ink);padding:10px 14px;font-family:"IBM Plex Mono",monospace;letter-spacing:.12em;text-transform:uppercase}
-    pre,code{font-family:"IBM Plex Mono",monospace;font-size:12px;white-space:pre-wrap}
-    table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px}
-    td,th{border-top:1px solid var(--hair);padding:8px 6px;text-align:left;color:#b8b6b1}
-    .ok{border:1px solid var(--gel);padding:14px;margin:18px 0}
-  </style>
+  <title>Seller desk — 6Frame Autopilot</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,500&family=Manrope:wght@400;500;600&display=swap"/>
+  <link rel="stylesheet" href="/assets/page.css"/>
 </head>
 <body>
-  <div class="wrap">
-    <p class="kicker">6Frame Studio · mint desk · {{ price_label }}</p>
-    <h1>Buyer URLs</h1>
+  <div class="shell buy">
+    <p class="kicker">Seller desk</p>
+    <h1>Mint a signed MCP URL</h1>
+    <p class="lede">Each customer gets one signed link. Paste it into Claude → Settings → Connectors. Revoke with <code>REVOKED_KEYS</code>.</p>
+
     {% if not authorized %}
-      <p>Add <code>?secret=ADMIN_SECRET</code> once. This desk mints signed MCP links. It does not charge cards.</p>
+    <form class="card" method="post" action="/admin/login">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required/>
+      <button class="btn" type="submit">Open desk</button>
+      <p class="fine">Uses <code>ADMIN_SECRET</code>. No card is charged here.</p>
+    </form>
     {% else %}
       {% if minted %}
       <div class="ok">
-        <p>Send this URL to {{ minted.email }}. Price on the letter: ${{ minted.price }} once.</p>
+        <p>Send this URL to {{ minted.email or minted.buyer }}. ${{ minted.price }} once. Days valid: {{ minted.days }}.</p>
         <pre>{{ minted.url }}</pre>
       </div>
       {% endif %}
-      <form method="post" action="/admin/mint">
-        <label>Buyer email</label>
-        <input name="email" type="email" required/>
-        <label>Buyer id (optional slug)</label>
-        <input name="buyer_id" type="text" placeholder="studio-name"/>
-        <label>Note</label>
-        <input name="note" type="text"/>
-        <button type="submit">Mint MCP URL · ${{ price }}</button>
+      <form class="card" method="post" action="/admin/mint">
+        <label for="buyer">Buyer (email or slug)</label>
+        <input id="buyer" name="buyer" type="text" required placeholder="studio@example.com"/>
+        <label for="days">Days valid (0 = no expiry)</label>
+        <input id="days" name="days" type="number" min="0" value="365"/>
+        <label for="note">Note</label>
+        <input id="note" name="note" type="text" placeholder="invoice #"/>
+        <button class="btn" type="submit">Generate link</button>
       </form>
-      <h2>Leads</h2>
+      <h2>Orders</h2>
       <table>
-        <tr><th>When</th><th>Email</th><th>Studio</th></tr>
-        {% for lead in leads %}
-        <tr><td>{{ lead.created_at }}</td><td>{{ lead.email }}</td><td>{{ lead.studio }}</td></tr>
+        <tr><th>When</th><th>Name</th><th>Email</th><th>Client</th></tr>
+        {% for order in orders %}
+        <tr><td>{{ order.created_at }}</td><td>{{ order.name }}</td><td>{{ order.email }}</td><td>{{ order.client }}</td></tr>
         {% else %}
-        <tr><td colspan="3">None yet.</td></tr>
+        <tr><td colspan="4">None yet.</td></tr>
         {% endfor %}
       </table>
       <h2>Buyers</h2>
       <table>
         <tr><th>Id</th><th>Email</th><th>Configured</th></tr>
-        {% for buyer in buyers %}
-        <tr><td>{{ buyer.buyer_id }}</td><td>{{ buyer.email }}</td><td>{{ buyer.configured }}</td></tr>
+        {% for b in buyers %}
+        <tr><td>{{ b.buyer_id }}</td><td>{{ b.email }}</td><td>{{ b.configured }}</td></tr>
         {% else %}
         <tr><td colspan="3">None minted.</td></tr>
         {% endfor %}

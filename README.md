@@ -63,8 +63,9 @@ Hashtag caps: LinkedIn/Facebook 5–8, IG/TikTok/YouTube 8–12, X 1–2 on the 
 | --- | --- |
 | `MCP_ISSUER_SECRET` | HMAC secret for buyer tokens. Required in production. |
 | `PUBLIC_BASE_URL` | Public origin, no trailing slash. Used when minting URLs and signing media. |
-| `ADMIN_SECRET` | Opens `/admin?secret=…` to mint buyer URLs. |
-| `DATA_DIR` | Buyer JSON, leads, media. Mount a volume. |
+| `ADMIN_SECRET` | Password for `/admin` seller desk. |
+| `REVOKED_KEYS` | Comma-separated buyer ids or full tokens to reject at `/mcp`. |
+| `DATA_DIR` | Buyer JSON, orders, media. Mount a volume. |
 | `PORT` | Default 8080. |
 | `STRIPE_PAYMENT_LINK` | Optional. `/buy` still does not collect a card. |
 
@@ -77,7 +78,7 @@ MCP_ISSUER_SECRET=… PUBLIC_BASE_URL=https://your-host \
   python -m app.mint --email buyer@studio.com --buyer-id north-light
 ```
 
-Or open `/admin?secret=ADMIN_SECRET` and mint from the desk. After a `/buy` lead, Bret sends the URL by hand.
+Or open `/admin`, enter `ADMIN_SECRET`, set buyer + days valid, Generate link. After a `/buy` order, send the URL by hand. Unauthenticated `/mcp` returns `401 Missing license key`.
 
 ## Run locally
 

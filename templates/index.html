@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>6Frame Autopilot — one MCP link, the daily social cut</title>
+  <meta name="description" content="Buy the Autopilot spine. Paste a private MCP URL into Claude, Claude Code, Cursor, ChatGPT, or Codex. Your keys. Viral original → trim under 60s → 6Frame voice → PostProxy."/>
+  <meta property="og:title" content="6Frame Autopilot MCP"/>
+  <meta property="og:description" content="A locked filmmaking workflow you run inside the model you already pay for. $997 once."/>
+  <meta property="og:image" content="/assets/og.jpg"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <style>
+    :root{
+      --void:#050505;
+      --panel:#0c0c0c;
+      --ink:#dcdad6;
+      --silver:#b8b6b1;
+      --mute:#7c7a75;
+      --gel:#d46a2c;
+      --hair:#1c1c1c;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;background:var(--void);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif}
+    body{min-height:100%;}
+    body::before{
+      content:"";position:fixed;inset:0;pointer-events:none;z-index:80;opacity:.09;
+      background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+    a{color:var(--ink)}
+    .bar{
+      position:sticky;top:0;z-index:40;
+      display:flex;justify-content:space-between;align-items:center;
+      padding:10px 28px;border-bottom:1px solid var(--hair);
+      background:rgba(5,5,5,.88);backdrop-filter:blur(10px);
+      font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--silver);
+    }
+    .mark{display:flex;gap:10px;align-items:baseline}
+    .mark b{font-family:"Bebas Neue",sans-serif;font-size:22px;letter-spacing:.08em;font-weight:400;color:var(--ink)}
+    .mark span{color:var(--gel)}
+    .bar nav{display:flex;gap:22px;align-items:center}
+    .bar a{color:var(--mute);text-decoration:none}
+    .bar a:hover{color:var(--ink)}
+    .plate{
+      display:inline-block;border:1px solid var(--ink);color:var(--ink);text-decoration:none;
+      padding:11px 16px;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+    }
+    .plate:hover{background:var(--ink);color:var(--void)}
+    .hero{padding:0 0 8px}
+    .letterbox{
+      margin:18px 18px 0;border:1px solid var(--hair);background:#000;
+      position:relative;overflow:hidden;
+    }
+    .letterbox::before,.letterbox::after{
+      content:"";position:absolute;left:0;right:0;height:46px;background:#000;z-index:3;pointer-events:none;
+    }
+    .letterbox::before{top:0}
+    .letterbox::after{bottom:0}
+    .split{
+      display:grid;grid-template-columns:minmax(160px,28%) 1fr;min-height:72vh;gap:10px;padding:58px 18px 58px;
+    }
+    .phone,.wide{position:relative;overflow:hidden;background:#080808}
+    .phone{aspect-ratio:9/16;max-height:62vh;margin:0 auto;border:1px solid #2a2a2a;align-self:center;width:min(100%,240px)}
+    .wide{aspect-ratio:16/9;align-self:center;border:1px solid #2a2a2a}
+    .phone img,.wide img{width:100%;height:100%;object-fit:cover;filter:saturate(.85) contrast(1.05)}
+    .tag{
+      position:absolute;left:8px;bottom:8px;z-index:2;
+      font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.16em;color:#fff;text-transform:uppercase;
+      background:rgba(0,0,0,.55);padding:4px 6px;
+    }
+    .tc{
+      position:absolute;top:58px;left:22px;z-index:4;
+      font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.2em;color:var(--gel);
+    }
+    .copy{width:min(920px,92%);margin:28px auto 10px}
+    .kicker{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--gel);margin:0 0 12px}
+    h1{
+      font-family:"Bebas Neue",sans-serif;font-weight:400;font-size:clamp(56px,10vw,118px);
+      line-height:.86;letter-spacing:.01em;margin:0 0 18px;color:var(--ink);
+    }
+    h1 i{font-style:normal;color:var(--silver)}
+    .lede{max-width:640px;color:var(--silver);font-size:17px;line-height:1.6}
+    .actions{display:flex;gap:18px;align-items:center;margin-top:22px;flex-wrap:wrap}
+    .ghost{color:var(--mute);text-decoration:none;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase}
+    .reel{
+      width:min(1080px,92%);margin:36px auto 0;border:1px solid var(--hair);background:#000;
+    }
+    .reel video{width:100%;display:block;aspect-ratio:2.39/1;object-fit:cover;background:#000}
+    .reel-cap{padding:10px 14px;color:var(--mute);font-size:13px;border-top:1px solid var(--hair);font-family:"IBM Plex Mono",monospace;letter-spacing:.04em}
+    .seq{border-top:1px solid var(--hair);padding:56px 0}
+    .seq-inner{width:min(1080px,92%);margin:0 auto;display:grid;grid-template-columns:160px 1fr;gap:28px}
+    .seq-id{
+      font-family:"Bebas Neue",sans-serif;font-size:42px;letter-spacing:.08em;color:var(--silver);line-height:1;
+    }
+    .seq-id small{display:block;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.2em;color:var(--gel);margin-bottom:8px}
+    h2{font-family:"Bebas Neue",sans-serif;font-weight:400;font-size:clamp(36px,5vw,64px);letter-spacing:.02em;margin:0 0 12px}
+    .seq p{color:var(--silver);max-width:560px;line-height:1.65;margin:0}
+    .spine{margin-top:22px;display:flex;flex-wrap:wrap;gap:8px}
+    .chip{
+      font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+      border:1px solid var(--hair);padding:7px 9px;color:var(--mute);
+    }
+    .slate{width:min(1080px,92%);margin:0 auto 72px;border:1px solid var(--hair);display:grid;grid-template-columns:1fr 1fr}
+    .slate div{padding:32px}
+    .slate div+div{border-left:1px solid var(--hair);background:var(--panel)}
+    pre{
+      margin:0;white-space:pre-wrap;font-family:"IBM Plex Mono",monospace;font-size:13px;line-height:1.65;color:var(--ink);
+    }
+    .proof{width:min(1080px,92%);margin:0 auto 80px}
+    .proof-grid{display:grid;grid-template-columns:220px 1fr;gap:16px;margin-top:20px}
+    .proof .phone{width:100%;max-height:none}
+    .caption-card{border:1px solid var(--hair);padding:22px;background:var(--panel)}
+    .caption-card p{color:var(--silver);margin:0 0 14px;line-height:1.6}
+    .tags{color:var(--ink);font-family:"IBM Plex Mono",monospace;font-size:12px}
+    .price-block{width:min(1080px,92%);margin:0 auto 80px;border-top:1px solid var(--hair);padding-top:48px}
+    .price-block h2{font-size:clamp(80px,16vw,180px);line-height:.8;margin:0}
+    .price-block h2 span{display:block;font-size:22px;letter-spacing:.2em;color:var(--mute);font-family:"IBM Plex Mono",monospace}
+    .price-block .lede{margin:18px 0 24px}
+    .notes{width:min(1080px,92%);margin:0 auto 90px}
+    .notes article{border-top:1px solid var(--hair);padding:18px 0}
+    .notes h3{margin:0 0 8px;font-size:16px;font-weight:500}
+    .notes p{margin:0;color:var(--mute);line-height:1.6}
+    footer{
+      width:min(1080px,92%);margin:0 auto;padding:28px 0 60px;
+      display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;
+      border-top:1px solid var(--hair);color:var(--mute);font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+    }
+    footer a{color:var(--mute)}
+    @media (max-width:820px){
+      .split,.seq-inner,.slate,.proof-grid{grid-template-columns:1fr}
+      .slate div+div{border-left:0;border-top:1px solid var(--hair)}
+      .bar nav a:not(.plate){display:none}
+      .phone{width:min(180px,50%)}
+    }
+  </style>
+</head>
+<body>
+  <header class="bar">
+    <div class="mark"><b>6FRAME</b><span>Autopilot</span></div>
+    <nav>
+      <a href="#seq-01">Scan</a>
+      <a href="#seq-02">Cut</a>
+      <a href="#seq-03">Post</a>
+      <a href="#price">{{ price_label }}</a>
+      <a class="plate" href="/buy">{{ cta }}</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <div class="letterbox">
+      <div class="tc">REC ● 00:00:01:08 &nbsp; 2.39 &nbsp; TUNGSTEN</div>
+      <div class="split">
+        <figure class="phone">
+          <img src="/assets/hero-9x16.jpg" alt="9:16 Shorts master"/>
+          <figcaption class="tag">9:16 · IG / TikTok / Shorts / FB</figcaption>
+        </figure>
+        <figure class="wide">
+          <img src="/assets/hero-16x9.jpg" alt="16:9 landscape master"/>
+          <figcaption class="tag">16:9 · LinkedIn / X</figcaption>
+        </figure>
+      </div>
+    </div>
+    <div class="copy">
+      <p class="kicker">One link. Your model. Your studio.</p>
+      <h1>Buy the Autopilot spine.<i> Run it inside the model you already pay for.</i></h1>
+      <p class="lede">
+        Not another dashboard. A private MCP URL. Paste it into Claude, Claude Code, Cursor, ChatGPT, or Codex.
+        You bring Gemini and PostProxy. Autopilot scans a viral AI-filmmaking original, cuts it under 60 seconds,
+        writes in your voice, and posts the two masters — vertical Shorts, landscape for the desks.
+      </p>
+      <div class="actions">
+        <a class="plate" href="/buy">{{ cta }}</a>
+        <a class="ghost" href="#watch">Watch 60 seconds</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="watch" class="reel">
+    <video controls playsinline preload="metadata" poster="/poster.jpg" src="/promo.mp4">
+      Your browser cannot play this video.
+    </video>
+    <p class="reel-cap">60s slate — letterboxed. The spine, not a product tour of a login.</p>
+  </section>
+
+  <section class="seq" id="seq-01">
+    <div class="seq-inner">
+      <div class="seq-id"><small>SEQ 01</small>SCAN</div>
+      <div>
+        <h2>Find the original that is already moving.</h2>
+        <p>Gemini grounds a live scan of AI-filmmaking clips. The job is not to invent a new Veo or Runway piece. The job is to name the original worth cutting today, and why.</p>
+      </div>
+    </div>
+  </section>
+  <section class="seq" id="seq-02">
+    <div class="seq-inner">
+      <div class="seq-id"><small>SEQ 02</small>CUT</div>
+      <div>
+        <h2>Download it. Trim it. Two masters.</h2>
+        <p>yt-dlp pulls the source. The cut stays under 60 seconds. Autopilot writes a 9:16 master for Instagram, TikTok, YouTube Shorts, and Facebook — and a 16:9 master for LinkedIn and X. Same story. Different frame.</p>
+      </div>
+    </div>
+  </section>
+  <section class="seq" id="seq-03">
+    <div class="seq-inner">
+      <div class="seq-id"><small>SEQ 03</small>POST</div>
+      <div>
+        <h2>Voice, hashtags, then PostProxy.</h2>
+        <p>Copy is rewritten in 6Frame voice unless you change the voice by talking to your model. Locked tags always ride along: #6FrameStudio #AIFilmmaking #AICinema, plus topic tags, capped per network. YouTube titles carry #Shorts. Publish goes out through your PostProxy account — your socials, your keys.</p>
+        <div class="spine">
+          <span class="chip">scan</span>
+          <span class="chip">download original</span>
+          <span class="chip">trim &lt; 60s</span>
+          <span class="chip">write copy</span>
+          <span class="chip">hashtags</span>
+          <span class="chip">publish 9:16 / 16:9</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="slate" id="voice">
+    <div>
+      <p class="kicker">The spine is locked. The slate is not.</p>
+      <h2>Same tools. Your brand.</h2>
+      <p class="lede">Platforms, voice, niche, the price you charge a client — those are conversation. You are not filing a ticket with a SaaS team. You are talking to the model you already keep open.</p>
+    </div>
+    <div>
+      <p class="kicker">Say this after you connect</p>
+      <pre>Run Autopilot for my studio.
+Brand voice: [theirs]
+Platforms: Instagram, TikTok, YouTube Shorts, Facebook.
+Connect PostProxy and use my Gemini key.</pre>
+    </div>
+  </section>
+
+  <section class="proof" id="proof">
+    <p class="kicker">Today’s cut — Autopilot framing</p>
+    <h2>A Short beside the landscape card.</h2>
+    <div class="proof-grid">
+      <figure class="phone">
+        <img src="/assets/hero-9x16.jpg" alt="Sample 9:16 Autopilot still"/>
+        <figcaption class="tag">YT Short · #Shorts</figcaption>
+      </figure>
+      <div class="caption-card">
+        <p>The original already had the light. We kept the flare, lost the open, and posted the trim. Not a remake. A cut of the clip that is already moving.</p>
+        <p class="tags">#6FrameStudio #AIFilmmaking #AICinema #Kling #NightDrive</p>
+        <p class="lede" style="margin-top:18px">LinkedIn and X get the 16:9 master and a shorter line. Instagram / TikTok / Shorts / Facebook leave as 9:16. That split is the product — not a toggle buried in a dashboard.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="price-block" id="price">
+    <p class="kicker">Buy the workflow</p>
+    <h2>${{ price }} <span>once</span></h2>
+    <p class="lede">
+      A social/video operator is two thousand a month and up. This is less than half of one of those months,
+      and you still bring your own Gemini and PostProxy. You are not renting a seat. You are buying the spine.
+    </p>
+    <a class="plate" href="/buy">{{ cta }}</a>
+    <p class="lede" style="margin-top:18px">Private signed MCP URL. Works in Claude, ChatGPT MCP, Claude Code, Cursor, and Codex.</p>
+  </section>
+
+  <section class="notes" id="notes">
+    <p class="kicker">Call sheet</p>
+    <article>
+      <h3>Do I need the 6Frame dashboard?</h3>
+      <p>No. You never log into a marketing desk. You paste a URL into the model you already pay for and type your studio.</p>
+    </article>
+    <article>
+      <h3>Which clients take the link?</h3>
+      <p>Claude.ai custom connectors, Claude Code, Cursor, ChatGPT with MCP, and Codex. The model is yours. We do not host a chat.</p>
+    </article>
+    <article>
+      <h3>Can I change the brand?</h3>
+      <p>Yes. Voice, platforms, niche filters, the price you charge a client — talk to your model. The locked part is the spine: scan the original, cut it, write, post.</p>
+    </article>
+    <article>
+      <h3>What keys do I bring?</h3>
+      <p>Your Gemini key (new keys should use gemini-3.1-pro-preview or gemini-3.6-flash) and your PostProxy key. Socials stay on your PostProxy account.</p>
+    </article>
+    <article>
+      <h3>What do I get after I pay?</h3>
+      <p>A private signed MCP URL. Bret sends it. You paste it once. Then: setup your keys, connect PostProxy, run Autopilot.</p>
+    </article>
+    <article>
+      <h3>Why MCP, not another app?</h3>
+      <p>Work and skill are no longer the moat. People already pay for a model and refuse to learn one more UI. What you can sell is access to a specialized workflow — the infrastructure sitting behind one link. <a href="{{ theory_url }}" target="_blank" rel="noreferrer">Optional footnote on that idea</a> — not the hero.</p>
+    </article>
+  </section>
+
+  <footer>
+    <div>{{ studio }} · Autopilot MCP · {{ price_label }}</div>
+    <div><a href="/buy">{{ cta }}</a></div>
+  </footer>
+</body>
+</html>

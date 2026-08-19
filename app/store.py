@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import json
+import secrets
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from app.config import DEFAULT_BRAND_VOICE, DEFAULT_PLATFORMS, data_dir
+from app.platforms import normalize_platforms
+from app.tokens import mint_token
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _buyer_path(buyer_id: str) -> Path:
+    return data_dir() / "buyers" / f"{buyer_id}.json"
+
+
+def _write(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def load_buyer(buyer_id: str) -> dict[str, Any] | None:
+    path = _buyer_path(buyer_id)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def ensure_buyer(
+    buyer_id: str,
+    *,
+    email: str = "",
+    note: str = "",
+    token: str | None = None,
+) -> dict[str, Any]:
+    existing = load_buyer(buyer_id)
+    if existing:
+        if email and not existing.get("email"):
+            existing["email"] = email
+            existing["updated_at"] = _now()
+            _write(_buyer_path(buyer_id), existing)
+        return existing
+    record = {
+        "buyer_id": buyer_id,
+        "email": email,
+        "note": note,
+        "created_at": _now(),
+        "updated_at": _now(),
+        "token": token or mint_token(buyer_id),
+        "gemini_api_key": "",
+        "postproxy_api_key": "",
+        "postproxy_profile_group_id": "",
+        "brand_voice": DEFAULT_BRAND_VOICE,
+        "platforms": list(DEFAULT_PLATFORMS),
+        "public_base_url": "",
+        "last_run": None,
+    }
+    _write(_buyer_path(buyer_id), record)
+    return record
+
+
+def save_buyer(record: dict[str, Any]) -> dict[str, Any]:
+    record["updated_at"] = _now()
+    if "platforms" in record:
+        record["platforms"] = normalize_platforms(record.get("platforms") or [])
+    _write(_buyer_path(record["buyer_id"]), record)
+    return record
+
+
+def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    record = load_buyer(buyer_id) or ensure_buyer(buyer_id)
+    secret_keys = {"gemini_api_key", "postproxy_api_key"}
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if key in secret_keys:
+            text = str(value).strip()
+            if text:
+                record[key] = text
+            continue
+        if key == "platforms":
+            record[key] = normalize_platforms(value if isinstance(value, list) else [value])
+            continue
+        if key in {
+            "brand_voice",
+            "postproxy_profile_group_id",
+            "public_base_url",
+            "email",
+            "note",
+        }:
+            record[key] = str(value).strip()
+    return save_buyer(record)
+
+
+def set_last_run(buyer_id: str, last_run: dict[str, Any]) -> dict[str, Any]:
+    record = load_buyer(buyer_id) or ensure_buyer(buyer_id)
+    record["last_run"] = last_run
+    return save_buyer(record)
+
+
+def public_config(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "buyer_id": record.get("buyer_id"),
+        "email": record.get("email") or None,
+        "brand_voice": record.get("brand_voice") or DEFAULT_BRAND_VOICE,
+        "platforms": record.get("platforms") or list(DEFAULT_PLATFORMS),
+        "public_base_url": record.get("public_base_url") or None,
+        "postproxy_profile_group_id": record.get("postproxy_profile_group_id") or None,
+        "gemini_key": _mask(record.get("gemini_api_key")),
+        "postproxy_key": _mask(record.get("postproxy_api_key")),
+        "configured": bool(record.get("gemini_api_key") and record.get("postproxy_api_key")),
+        "updated_at": record.get("updated_at"),
+        "last_run": record.get("last_run"),
+    }
+
+
+def _mask(secret: str | None) -> str | None:
+    if not secret:
+        return None
+    if len(secret) <= 4:
+        return "••••"
+    return f"••••{secret[-4:]}"
+
+
+def append_lead(payload: dict[str, Any]) -> dict[str, Any]:
+    lead = {
+        "id": secrets.token_hex(8),
+        "created_at": _now(),
+        **payload,
+    }
+    path = data_dir() / "leads.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(lead) + "\n")
+    return lead
+
+
+def list_leads(limit: int = 50) -> list[dict[str, Any]]:
+    path = data_dir() / "leads.jsonl"
+    if not path.exists():
+        return []
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return list(reversed(rows[-limit:]))
+
+
+def list_buyers() -> list[dict[str, Any]]:
+    folder = data_dir() / "buyers"
+    out = []
+    for path in sorted(folder.glob("*.json")):
+        try:
+            out.append(public_config(json.loads(path.read_text(encoding="utf-8"))))
+        except json.JSONDecodeError:
+            continue
+    return out

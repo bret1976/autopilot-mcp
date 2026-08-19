@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+data/
+.env
+.env.*
+!.env.example
+*.mp4
+!public/promo.mp4
+public/media/
+tmp/
+.DS_Store
+*.log

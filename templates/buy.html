@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Get the MCP link · ${{ price }} — 6Frame Autopilot</title>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <style>
+    :root{--void:#050505;--ink:#dcdad6;--mute:#7c7a75;--gel:#d46a2c;--hair:#1c1c1c}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--void);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif}
+    .wrap{width:min(640px,92%);margin:0 auto;padding:48px 0 80px}
+    a{color:var(--ink)}
+    .kicker{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--gel)}
+    h1{font-family:"Bebas Neue",sans-serif;font-size:clamp(48px,8vw,84px);font-weight:400;line-height:.9;margin:10px 0 16px}
+    p{color:#b8b6b1;line-height:1.65}
+    label{display:block;margin:16px 0 6px;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+    input,textarea{width:100%;background:#0c0c0c;border:1px solid var(--hair);color:var(--ink);padding:12px;font:inherit}
+    button,.plate{
+      display:inline-block;margin-top:20px;border:1px solid var(--ink);background:transparent;color:var(--ink);
+      padding:12px 16px;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;text-decoration:none;
+    }
+    .ok{border:1px solid var(--gel);padding:16px;margin:20px 0}
+    .back{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="back" href="/">← 6Frame Autopilot</a>
+    <p class="kicker">Order · no card on this page</p>
+    <h1>{{ cta }}</h1>
+    <p>{{ price_label }}. You are buying a private signed MCP URL — the Autopilot spine — not a seat and not a dashboard login.</p>
+    {% if submitted %}
+    <div class="ok">
+      <strong>Noted.</strong>
+      <p>Bret will send your private MCP URL to {{ lead.email }}. Keep Gemini and PostProxy keys ready. Do not send those keys in email.</p>
+    </div>
+    {% else %}
+    <form method="post" action="/api/leads" accept="text/html">
+      <input type="hidden" name="source" value="buy"/>
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required placeholder="you@studio.com"/>
+      <label for="studio">Studio name</label>
+      <input id="studio" name="studio" type="text" placeholder="Your studio"/>
+      <label for="note">Note (optional)</label>
+      <textarea id="note" name="note" rows="3" placeholder="Where you will paste the link — Claude, Cursor, Codex…"></textarea>
+      <button type="submit">Request the link · ${{ price }}</button>
+    </form>
+    {% if payment_link %}
+    <p>If you already have a payment link from Bret: <a href="{{ payment_link }}">pay ${{ price }} via Stripe</a>. This page still does not collect a card.</p>
+    {% endif %}
+    <p>After you pay, you receive one URL. Paste it into Claude → Settings → Connectors, or into Claude Code / Cursor / Codex <code>mcp.json</code>. Then tell the model your brand and your keys.</p>
+    {% endif %}
+  </div>
+</body>
+</html>

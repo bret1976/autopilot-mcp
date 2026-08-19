@@ -1,0 +1,226 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+from app.config import DEFAULT_BRAND_VOICE, DEFAULT_PLATFORMS, LOCKED_HASHTAGS, MAX_CLIP_SECONDS
+from app.gemini import generate_json
+from app.hashtags import apply_hashtags, topic_tags
+from app.media import download_and_cut
+from app.platforms import split_batches, youtube_title
+from app import postproxy
+from app.store import public_config, set_last_run
+
+SCAN_PROMPT = """You are scanning live public web results for viral AI-filmmaking clips.
+
+Find one ORIGINAL clip worth cutting today. Prefer YouTube / TikTok / Instagram
+URLs that a downloader can fetch. Do not invent a new generated film.
+Do not recommend generating Veo, FAL, or Runway footage.
+
+Return JSON only:
+{{
+  "title": "short working title",
+  "source_url": "https://...",
+  "platform": "youtube|tiktok|instagram",
+  "why": "one sentence on why this cut is moving",
+  "topic_tags": ["Kling", "NightDrive"],
+  "suggested_start": 0,
+  "suggested_duration": 45,
+  "notes": "what to keep in the trim"
+}}
+
+Studio filter: {niche}
+Voice reminder: {voice}
+"""
+
+COPY_PROMPT = """Rewrite social copy for this cut. Stay in the studio voice.
+Never use: game-changer, revolutionize, unlock, next-level, crush, viral hack.
+
+Voice:
+{voice}
+
+Title: {title}
+Why it is moving: {why}
+Notes: {notes}
+Topic tags (ideas only): {tags}
+
+Return JSON only:
+{{
+  "title": "youtube title without hashtags except we will add #Shorts later",
+  "topic_tags": ["tag", "tag"],
+  "captions": {{
+    "instagram": "caption body without hashtags",
+    "tiktok": "...",
+    "youtube": "...",
+    "facebook": "...",
+    "linkedin": "...",
+    "twitter": "short body, room for 1-2 tags under 280"
+  }}
+}}
+"""
+
+
+def _stamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def scan_trends(record: dict[str, Any], niche: str = "", mock: bool = False) -> dict[str, Any]:
+    if mock:
+        return {
+            "title": "Night tungsten / Kling street cut",
+            "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "platform": "youtube",
+            "why": "The original already has the light. We cut it, we do not remake it.",
+            "topic_tags": ["Kling", "NightDrive"],
+            "suggested_start": 3,
+            "suggested_duration": 48,
+            "notes": "Keep the lamp flare. Lose the talking-head open.",
+            "mocked": True,
+        }
+    voice = record.get("brand_voice") or DEFAULT_BRAND_VOICE
+    return await generate_json(
+        record.get("gemini_api_key") or "",
+        SCAN_PROMPT.format(niche=niche or "AI filmmaking, cinematic shorts", voice=voice),
+        grounded=True,
+    )
+
+
+async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = False) -> dict[str, Any]:
+    platforms = record.get("platforms") or list(DEFAULT_PLATFORMS)
+    extras = topic_tags(scan.get("topic_tags") or [])
+    if mock:
+        raw = {
+            "title": scan.get("title") or "Studio cut",
+            "topic_tags": extras or ["Kling", "NightDrive"],
+            "captions": {
+                "instagram": "The original already had the light. We kept the flare and lost the rest.",
+                "tiktok": "Not a remake. A trim of the clip that is already moving.",
+                "youtube": "Cut from the viral original. Under a minute.",
+                "facebook": "A 9:16 cut from the original — same lamp, shorter breath.",
+                "linkedin": "Operators keep the model they already pay for. The spine is the product.",
+                "twitter": "The original. Cut under 60. Posted.",
+            },
+        }
+    else:
+        raw = await generate_json(
+            record.get("gemini_api_key") or "",
+            COPY_PROMPT.format(
+                voice=record.get("brand_voice") or DEFAULT_BRAND_VOICE,
+                title=scan.get("title") or "",
+                why=scan.get("why") or "",
+                notes=scan.get("notes") or "",
+                tags=", ".join(extras) or "AI filmmaking",
+            ),
+            grounded=False,
+        )
+    extras = topic_tags(raw.get("topic_tags") or extras)
+    captions: dict[str, str] = {}
+    for platform in platforms:
+        body = (raw.get("captions") or {}).get(platform) or raw.get("title") or ""
+        captions[platform] = apply_hashtags(platform, body, extras)
+    return {
+        "title": raw.get("title") or scan.get("title") or "Studio cut",
+        "youtube_title": youtube_title(raw.get("title") or scan.get("title") or "Studio cut"),
+        "topic_tags": extras,
+        "locked_hashtags": list(LOCKED_HASHTAGS),
+        "captions": captions,
+    }
+
+
+async def publish_cut(
+    record: dict[str, Any],
+    copy: dict[str, Any],
+    media: dict[str, Any],
+    *,
+    mock: bool = False,
+    draft: bool = False,
+) -> dict[str, Any]:
+    platforms = record.get("platforms") or list(DEFAULT_PLATFORMS)
+    batches = split_batches(platforms)
+    if mock:
+        return {
+            "mocked": True,
+            "batches": batches,
+            "posts": [
+                {
+                    "aspect": "9:16",
+                    "profiles": batches["vertical_9x16"],
+                    "media": media.get("vertical_url"),
+                },
+                {
+                    "aspect": "16:9",
+                    "profiles": batches["landscape_16x9"],
+                    "media": media.get("landscape_url"),
+                },
+            ],
+        }
+
+    posts = []
+    key = record.get("postproxy_api_key") or ""
+    group = record.get("postproxy_profile_group_id") or ""
+    for aspect, names, url in (
+        ("9:16", batches["vertical_9x16"], media.get("vertical_url")),
+        ("16:9", batches["landscape_16x9"], media.get("landscape_url")),
+    ):
+        if not names:
+            continue
+        # One PostProxy call per platform so captions and YouTube title stay correct.
+        for name in names:
+            platform_params: dict[str, Any] = {}
+            if name == "youtube":
+                platform_params["youtube"] = {
+                    "title": copy["youtube_title"],
+                    "privacy_status": "public",
+                }
+            if name == "instagram":
+                platform_params["instagram"] = {"format": "reel"}
+            if name == "facebook":
+                platform_params["facebook"] = {"format": "reel"}
+            if name == "tiktok":
+                platform_params["tiktok"] = {"format": "video"}
+            result = await postproxy.create_post(
+                key,
+                body=copy["captions"].get(name, ""),
+                profiles=[name],
+                media=[url] if url else [],
+                platforms=platform_params or None,
+                profile_group_id=group,
+                draft=draft,
+            )
+            posts.append({"aspect": aspect, "platform": name, "result": result})
+    return {"mocked": False, "batches": batches, "posts": posts}
+
+
+async def run_autopilot(
+    record: dict[str, Any],
+    *,
+    niche: str = "",
+    source_url: str = "",
+    mock: bool = False,
+    draft: bool = False,
+) -> dict[str, Any]:
+    scan = await scan_trends(record, niche=niche, mock=mock)
+    url = source_url or scan.get("source_url") or ""
+    if not url:
+        raise RuntimeError("scan_trends did not return a source_url")
+    start = float(scan.get("suggested_start") or 0)
+    duration = float(scan.get("suggested_duration") or MAX_CLIP_SECONDS)
+    media = download_and_cut(
+        record["buyer_id"],
+        url,
+        start=start,
+        duration=duration,
+        mock=mock,
+    )
+    copy = await write_copy(record, scan, mock=mock)
+    published = await publish_cut(record, copy, media, mock=mock, draft=draft)
+    last_run = {
+        "at": _stamp(),
+        "mocked": mock,
+        "scan": scan,
+        "media": {k: v for k, v in media.items() if k != "raw"},
+        "copy": copy,
+        "publish": published,
+    }
+    saved = set_last_run(record["buyer_id"], last_run)
+    return {"ok": True, **last_run, "config": public_config(saved)}

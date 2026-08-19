@@ -76,7 +76,7 @@ def test_health_and_landing() -> None:
         assert "Codex" in text
         assert "9:16" in text
         assert 'src="/promo.mp4"' in text
-        assert "Live Autopilot" in text
+        assert "voice walks you through" in text
         assert "scan" in text.lower()
         for phrase in BANNED:
             assert phrase not in text
@@ -103,6 +103,22 @@ def test_promo_is_hybrid_value_and_live_app() -> None:
     ).strip()
     duration = float(probe)
     assert 45 <= duration <= 75
+    audio = subprocess.check_output(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_type,duration",
+            "-of",
+            "csv=p=0",
+            str(promo),
+        ],
+        text=True,
+    ).strip()
+    assert audio.startswith("audio")
 
 
 def test_buy_form() -> None:

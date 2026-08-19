@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Hybrid hero: value cards interleaved with live Autopilot app footage.
-
-Not title cards only. Not a 97s dashboard tour. Back and forth — what it
-is worth, then the cockpit / scan / PostProxy / workshop actually running.
-"""
+"""Hybrid hero: live Autopilot footage, value cards, and a spoken walkthrough."""
 
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 import urllib.request
 from pathlib import Path
@@ -15,6 +12,9 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from voiceover import pad_to, render_line  # noqa: E402
+
 PUBLIC = ROOT / "public"
 SOURCE = ROOT / "scripts" / "assets" / "live-autopilot.mp4"
 SOURCE_GIT = "88e0102:public/promo.mp4"
@@ -241,7 +241,7 @@ def ensure_source() -> Path:
     return SOURCE
 
 
-def _encode_card(png: Path, dest: Path, seconds: float) -> None:
+def _encode_card(png: Path, dest: Path, seconds: float, audio: Path) -> None:
     subprocess.check_call(
         [
             "ffmpeg",
@@ -250,6 +250,8 @@ def _encode_card(png: Path, dest: Path, seconds: float) -> None:
             "1",
             "-i",
             str(png),
+            "-i",
+            str(audio),
             "-t",
             f"{seconds:.2f}",
             "-vf",
@@ -260,7 +262,14 @@ def _encode_card(png: Path, dest: Path, seconds: float) -> None:
             "libx264",
             "-pix_fmt",
             "yuv420p",
-            "-an",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
             str(dest),
         ],
         stdout=subprocess.DEVNULL,
@@ -268,11 +277,12 @@ def _encode_card(png: Path, dest: Path, seconds: float) -> None:
     )
 
 
-def _encode_app(src: Path, start: float, seconds: float, overlay: Path, dest: Path) -> None:
+def _encode_app(src: Path, start: float, seconds: float, overlay: Path, dest: Path, audio: Path) -> None:
     # Crop browser chrome + old burned captions; letterbox on the landing black.
     vf = (
         f"crop=1280:600:0:92,scale=1920:900,"
         f"pad=1920:1080:0:28:color={BG_HEX},"
+        f"tpad=stop_mode=clone:stop_duration=2,"
         f"fade=t=in:st=0:d=0.25,fade=t=out:st={seconds - 0.25:.2f}:d=0.25"
     )
     subprocess.check_call(
@@ -287,19 +297,30 @@ def _encode_app(src: Path, start: float, seconds: float, overlay: Path, dest: Pa
             "1",
             "-i",
             str(overlay),
+            "-i",
+            str(audio),
             "-t",
             f"{seconds:.2f}",
             "-filter_complex",
             f"[0:v]{vf}[v];[v][1:v]overlay=0:0,format=yuv420p[out]",
             "-map",
             "[out]",
+            "-map",
+            "2:a",
             "-r",
             "30",
             "-c:v",
             "libx264",
             "-pix_fmt",
             "yuv420p",
-            "-an",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
             str(dest),
         ],
         stdout=subprocess.DEVNULL,
@@ -351,23 +372,28 @@ def render() -> None:
         poster_set = False
         for i, beat in enumerate(timeline):
             dest = tmp_path / f"beat-{i:02d}.mp4"
+            key = str(beat[1])
+            spoken = tmp_path / f"vo-{key}.wav"
+            spoken_len = render_line(key, spoken)
+            seconds = max(float(beat[-1]), spoken_len + 0.28)
+            padded = tmp_path / f"vo-{key}-pad.wav"
+            pad_to(spoken, padded, seconds)
             if beat[0] == "card":
-                _, key, seconds = beat
                 png = tmp_path / f"card-{key}.png"
                 cards[key].save(png, "PNG")
-                _encode_card(png, dest, float(seconds))
+                _encode_card(png, dest, seconds, padded)
             else:
-                _, key, start, seconds = beat
+                start = float(beat[2])
                 overlay = tmp_path / f"third-{key}.png"
                 thirds[key].save(overlay, "PNG")
-                _encode_app(source, float(start), float(seconds), overlay, dest)
+                _encode_app(source, start, seconds, overlay, dest, padded)
                 if not poster_set:
                     subprocess.check_call(
                         [
                             "ffmpeg",
                             "-y",
                             "-ss",
-                            f"{float(start) + 1.2:.2f}",
+                            f"{start + 1.2:.2f}",
                             "-i",
                             str(source),
                             "-frames:v",

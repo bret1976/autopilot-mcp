@@ -6,13 +6,15 @@ from typing import Any
 from app.config import DEFAULT_BRAND_VOICE, MAX_CLIP_SECONDS, ONBOARD_PLATFORMS
 from app.gemini import generate_json
 from app.hashtags import apply_hashtags, topic_tags
-from app.media import download_and_cut
+from app.media import MediaError, download_and_cut
 from app.platforms import split_batches, youtube_title
 from app import postproxy
 from app.store import public_config, set_last_run
 
 SCAN_PROMPT = """You are scanning live public web results for one ORIGINAL clip this brand can cut today.
-Prefer YouTube / TikTok / Instagram URLs a downloader can fetch.
+The downloader runs on a datacenter IP. Long YouTube talks (TEDx, podcasts, news) get bot-walled.
+Prefer a SHORT original (under 90s) in this order: TikTok, Instagram Reel, direct .mp4, YouTube Short.
+Never return a URL from this failed list: {failed}
 Do not invent a new generated film.
 Do not recommend generating Veo, FAL, or Runway footage.
 Do not write as 6Frame Studio unless this brand is 6Frame.
@@ -21,7 +23,7 @@ Return JSON only:
 {{
   "title": "short working title",
   "source_url": "https://...",
-  "platform": "youtube|tiktok|instagram",
+  "platform": "tiktok|instagram|youtube",
   "why": "one sentence on why this cut is moving",
   "topic_tags": ["TopicOne", "TopicTwo"],
   "suggested_start": 0,
@@ -68,7 +70,13 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-async def scan_trends(record: dict[str, Any], niche: str = "", mock: bool = False) -> dict[str, Any]:
+async def scan_trends(
+    record: dict[str, Any],
+    niche: str = "",
+    mock: bool = False,
+    exclude_urls: list[str] | None = None,
+) -> dict[str, Any]:
+    failed = ", ".join(exclude_urls or []) or "(none)"
     if mock:
         return {
             "title": "Night tungsten / Kling street cut",
@@ -92,6 +100,7 @@ async def scan_trends(record: dict[str, Any], niche: str = "", mock: bool = Fals
             voice=voice,
             brand=brand,
             website=website,
+            failed=failed,
         ),
         grounded=True,
     )
@@ -214,19 +223,44 @@ async def run_autopilot(
     mock: bool = False,
     draft: bool = False,
 ) -> dict[str, Any]:
-    scan = await scan_trends(record, niche=niche, mock=mock)
-    url = source_url or scan.get("source_url") or ""
-    if not url:
-        raise RuntimeError("scan_trends did not return a source_url")
-    start = float(scan.get("suggested_start") or 0)
-    duration = float(scan.get("suggested_duration") or MAX_CLIP_SECONDS)
-    media = download_and_cut(
-        record["buyer_id"],
-        url,
-        start=start,
-        duration=duration,
-        mock=mock,
-    )
+    skipped: list[dict[str, str]] = []
+    pinned = (source_url or "").strip()
+    scan: dict[str, Any] = {}
+    media: dict[str, Any] | None = None
+    url = ""
+    for attempt in range(3):
+        exclude = [item["url"] for item in skipped]
+        scan = await scan_trends(record, niche=niche, mock=mock, exclude_urls=exclude)
+        url = (pinned if attempt == 0 and pinned else "") or str(scan.get("source_url") or "")
+        if not url:
+            break
+        if url in exclude:
+            pinned = ""
+            continue
+        start = float(scan.get("suggested_start") or 0)
+        duration = float(scan.get("suggested_duration") or MAX_CLIP_SECONDS)
+        try:
+            media = download_and_cut(
+                record["buyer_id"],
+                url,
+                start=start,
+                duration=duration,
+                mock=mock,
+            )
+            break
+        except MediaError as exc:
+            if exc.code not in {"source_bot_check", "download_failed"}:
+                raise
+            skipped.append({"url": url, "code": exc.code, "error": str(exc)})
+            pinned = ""
+            continue
+    if media is None:
+        last = skipped[-1]["error"] if skipped else "scan_trends did not return a source_url"
+        raise MediaError(
+            last
+            + " Tried another original automatically. Call run_autopilot again without a source_url.",
+            code=skipped[-1]["code"] if skipped else "download_failed",
+        )
     copy = await write_copy(record, scan, mock=mock)
     published = await publish_cut(record, copy, media, mock=mock, draft=draft)
     last_run = {
@@ -236,6 +270,7 @@ async def run_autopilot(
         "media": {k: v for k, v in media.items() if k != "raw"},
         "copy": copy,
         "publish": published,
+        "skipped_sources": skipped,
     }
     saved = set_last_run(record["buyer_id"], last_run)
     return {"ok": True, **last_run, "config": public_config(saved)}

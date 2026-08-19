@@ -7,6 +7,7 @@ os.environ.setdefault("DATA_DIR", "/tmp/autopilot-mcp-tests")
 
 import pytest
 
+from app.media import MediaError
 from app.spine import run_autopilot
 from app.store import ensure_buyer, public_config, save_buyer
 
@@ -33,3 +34,74 @@ async def test_run_autopilot_mock_path() -> None:
     public = public_config(record)
     assert public["gemini_key"] is None
     assert "gemini_api_key" not in public
+
+
+@pytest.mark.asyncio
+async def test_run_autopilot_skips_bot_walled_source(monkeypatch) -> None:
+    record = ensure_buyer("kanek-skip", email="kanek@studio.test")
+    record["brand_name"] = "KANEK"
+    record["platforms"] = ["linkedin", "twitter", "instagram", "youtube"]
+    record = save_buyer(record)
+    scans = [
+        {
+            "title": "TEDx talk",
+            "source_url": "https://www.youtube.com/watch?v=tedxfail",
+            "platform": "youtube",
+            "why": "talk",
+            "topic_tags": ["AI"],
+            "suggested_start": 0,
+            "suggested_duration": 45,
+            "notes": "long",
+        },
+        {
+            "title": "Short reel",
+            "source_url": "https://www.tiktok.com/@x/video/1",
+            "platform": "tiktok",
+            "why": "short",
+            "topic_tags": ["AI"],
+            "suggested_start": 0,
+            "suggested_duration": 20,
+            "notes": "keep the cut",
+        },
+    ]
+
+    async def fake_scan(record, niche="", mock=False, exclude_urls=None):
+        return scans.pop(0)
+
+    def fake_download(buyer_id, url, **kwargs):
+        if "youtube.com" in url:
+            raise MediaError(
+                "Could not pull the source clip from youtube.com. "
+                "That is the original-video download, not your YouTube channel or PostProxy publish.",
+                code="source_bot_check",
+            )
+        return {
+            "source_url": url,
+            "mock": False,
+            "vertical": "cut-9x16.mp4",
+            "landscape": "cut-16x9.mp4",
+            "vertical_url": "https://example.test/v",
+            "landscape_url": "https://example.test/l",
+        }
+
+    async def fake_copy(record, scan, mock=False):
+        return {
+            "title": scan["title"],
+            "youtube_title": f"{scan['title']} #Shorts",
+            "topic_tags": ["AI"],
+            "captions": {"linkedin": "body", "twitter": "body", "instagram": "body", "youtube": "body"},
+        }
+
+    async def fake_publish(record, copy, media, mock=False, draft=False):
+        return {"mocked": True, "batches": {}, "posts": []}
+
+    monkeypatch.setattr("app.spine.scan_trends", fake_scan)
+    monkeypatch.setattr("app.spine.download_and_cut", fake_download)
+    monkeypatch.setattr("app.spine.write_copy", fake_copy)
+    monkeypatch.setattr("app.spine.publish_cut", fake_publish)
+
+    result = await run_autopilot(record, source_url="https://www.youtube.com/watch?v=tedxfail")
+    assert result["ok"] is True
+    assert result["media"]["source_url"] == "https://www.tiktok.com/@x/video/1"
+    assert result["skipped_sources"][0]["code"] == "source_bot_check"
+    assert "not your YouTube channel" in result["skipped_sources"][0]["error"]

@@ -8,7 +8,7 @@ from starlette.requests import Request
 
 from app.config import ONBOARD_PLATFORMS, public_base_url
 from app import postproxy
-from app.media import download_and_cut
+from app.media import MediaError, download_and_cut
 from app.onboard import blocked, fetch_brand_from_website, readiness
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
 from app.store import ensure_buyer, load_buyer, public_config, update_setup
@@ -33,7 +33,11 @@ mcp = FastMCP(
         "Brand comes from THEIR name + website (example: IAN Group / iangroup.ai). "
         "Default platforms: LinkedIn, X, Instagram, YouTube, Facebook. "
         "Daily run defaults to 8:00 AM PT after they are wired. "
-        "First live run uses draft=true so they can check the cut."
+        "First live run uses draft=true so they can check the cut. "
+        "If download fails with source_bot_check, that is YouTube/TikTok blocking "
+        "the SOURCE clip fetch — not the buyer's connected YouTube channel. "
+        "Do not tell them publishing is blocked. Call run_autopilot again without "
+        "source_url so we pick another original."
     ),
 )
 
@@ -253,13 +257,13 @@ async def postproxy_connect(
 
 
 @mcp.tool(name="scan_trends")
-async def scan_trends_tool(niche: str = "") -> dict[str, Any]:
+async def scan_trends_tool(niche: str = "", exclude_urls: list[str] | None = None) -> dict[str, Any]:
     """Live Gemini scan for a viral original in the buyer's brand niche. No mock. No new clip."""
     record = current_record()
     gate = blocked(record, need="scan")
     if gate:
         return gate
-    scan = await scan_trends(record, niche=niche, mock=False)
+    scan = await scan_trends(record, niche=niche, mock=False, exclude_urls=exclude_urls)
     return {"ok": True, "scan": scan}
 
 
@@ -271,13 +275,26 @@ async def download_original(
 ) -> dict[str, Any]:
     """Download the original with yt-dlp and cut two masters: 9:16 and 16:9, under 60s."""
     record = current_record()
-    media = download_and_cut(
-        record["buyer_id"],
-        source_url,
-        start=start,
-        duration=duration,
-        mock=False,
-    )
+    try:
+        media = download_and_cut(
+            record["buyer_id"],
+            source_url,
+            start=start,
+            duration=duration,
+            mock=False,
+        )
+    except MediaError as exc:
+        return {
+            "ok": False,
+            "step": "download",
+            "code": exc.code,
+            "source_url": source_url,
+            "say_to_user": str(exc),
+            "next": (
+                "Call run_autopilot without source_url, or scan_trends with this URL in "
+                "exclude_urls. Do not say their YouTube channel is disconnected."
+            ),
+        }
     return {"ok": True, "media": media}
 
 
@@ -352,13 +369,25 @@ async def run_autopilot_tool(
     gate = blocked(record, need="run")
     if gate:
         return gate
-    return await run_autopilot(
-        record,
-        niche=niche,
-        source_url=source_url,
-        mock=False,
-        draft=draft,
-    )
+    try:
+        return await run_autopilot(
+            record,
+            niche=niche,
+            source_url=source_url,
+            mock=False,
+            draft=draft,
+        )
+    except MediaError as exc:
+        return {
+            "ok": False,
+            "step": "download",
+            "code": exc.code,
+            "say_to_user": str(exc),
+            "next": (
+                "Source fetch failed, not YouTube publishing. "
+                "Run again without source_url so we pick a TikTok or Short instead of a long YouTube talk."
+            ),
+        }
 
 
 @mcp.tool

@@ -112,3 +112,24 @@ def revoked_keys() -> set[str]:
     if not raw:
         return set()
     return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def ytdlp_cookies_file() -> Path | None:
+    """Optional Netscape cookies so YouTube stops treating Railway as a bot."""
+    path = _env("YTDLP_COOKIES_FILE") or _env("YOUTUBE_COOKIES_FILE")
+    if path:
+        candidate = Path(path).expanduser()
+        if candidate.exists():
+            return candidate
+    raw = _env("YTDLP_COOKIES_B64")
+    if not raw:
+        return None
+    dest = data_dir() / "youtube.cookies"
+    try:
+        import base64
+
+        dest.write_bytes(base64.b64decode(raw))
+        dest.chmod(0o600)
+        return dest
+    except Exception:  # noqa: BLE001
+        return None

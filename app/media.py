@@ -8,12 +8,57 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-from app.config import MAX_CLIP_SECONDS, data_dir, issuer_secret, public_base_url
+from app.config import MAX_CLIP_SECONDS, data_dir, issuer_secret, public_base_url, ytdlp_cookies_file
+
+SOURCE_BLOCK_MARKERS = (
+    "sign in to confirm",
+    "not a bot",
+    "login_required",
+    "login required",
+    "use --cookies",
+    "http error 429",
+    "http error 403",
+    "unable to extract",
+    "video unavailable",
+    "private video",
+    "members-only",
+    "members only",
+    "age-restricted",
+    "join this channel",
+    "requested content is not available",
+    "rate-limit",
+    "ratelimit",
+    "captcha",
+    "please log in",
+    "please login",
+    "cookies are no longer valid",
+    "confirm you’re not a bot",
+    "confirm you're not a bot",
+)
 
 
 class MediaError(RuntimeError):
-    pass
+    def __init__(self, message: str, code: str = "download_failed") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def is_source_block(text: str) -> bool:
+    blob = (text or "").lower()
+    return any(marker in blob for marker in SOURCE_BLOCK_MARKERS)
+
+
+def source_block_message(url: str, detail: str = "") -> str:
+    host = urlparse(url).netloc.replace("www.", "") or "the source host"
+    tail = (detail or "").strip().splitlines()[-1][:240] if detail else ""
+    extra = f" Host said: {tail}" if tail else ""
+    return (
+        f"Could not pull the source clip from {host}. "
+        "That is the original-video download, not your YouTube channel or PostProxy publish."
+        f"{extra}"
+    )
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
@@ -58,6 +103,42 @@ def _which(name: str) -> str | None:
     return shutil.which(name)
 
 
+def _is_youtube(url: str) -> bool:
+    host = urlparse(url).netloc.lower()
+    return any(part in host for part in ("youtube.com", "youtu.be", "youtube-nocookie.com"))
+
+
+def _pull_strategies(url: str) -> list[list[str]]:
+    cookies = ytdlp_cookies_file()
+    cookie_args = ["--cookies", str(cookies)] if cookies else []
+    shared = ["--no-playlist", "--geo-bypass", "--socket-timeout", "30"]
+    extras: list[list[str]] = []
+    if _is_youtube(url):
+        extras = [
+            ["--extractor-args", "youtube:player_client=tv,web_safari"],
+            ["--extractor-args", "youtube:player_client=web_embedded,tv_embedded"],
+            ["--extractor-args", "youtube:player_client=mweb,web"],
+            ["--impersonate", "chrome", "--extractor-args", "youtube:player_client=tv,web_safari"],
+        ]
+        if cookie_args:
+            extras.insert(0, cookie_args + ["--extractor-args", "youtube:player_client=web,mweb,tv"])
+    else:
+        extras = [
+            ["--impersonate", "chrome"],
+            [],
+        ]
+        if cookie_args:
+            extras.insert(0, cookie_args)
+    return [shared + extra for extra in extras]
+
+
+def _find_raw(dest: Path, stem: str) -> Path | None:
+    matches = [path for path in dest.glob(f"{stem}-raw.*") if path.is_file() and path.stat().st_size > 0]
+    if not matches:
+        return None
+    return sorted(matches, key=lambda path: path.stat().st_mtime, reverse=True)[0]
+
+
 def download_and_cut(
     buyer_id: str,
     source_url: str,
@@ -69,12 +150,13 @@ def download_and_cut(
     duration = max(3.0, min(float(duration), float(MAX_CLIP_SECONDS)))
     dest = buyer_media_dir(buyer_id)
     stem = hashlib.sha256(source_url.encode()).hexdigest()[:12]
-    raw = dest / f"{stem}-raw.mp4"
+    raw_template = dest / f"{stem}-raw.%(ext)s"
     vertical = dest / f"{stem}-9x16.mp4"
     landscape = dest / f"{stem}-16x9.mp4"
     meta_path = dest / f"{stem}.json"
 
     if mock:
+        raw = dest / f"{stem}-raw.mp4"
         for path in (raw, vertical, landscape):
             path.write_bytes(b"MOCK")
         record = {
@@ -91,24 +173,35 @@ def download_and_cut(
     yt_dlp = _which("yt-dlp")
     ffmpeg = _which("ffmpeg")
     if not yt_dlp:
-        raise MediaError("yt-dlp is not installed on this host")
+        raise MediaError("yt-dlp is not installed on this host", code="downloader_missing")
     if not ffmpeg:
-        raise MediaError("ffmpeg is not installed on this host")
+        raise MediaError("ffmpeg is not installed on this host", code="downloader_missing")
 
-    pull = _run(
-        [
-            yt_dlp,
-            "-f",
-            "bv*+ba/b",
-            "--merge-output-format",
-            "mp4",
-            "-o",
-            str(raw),
-            source_url,
-        ]
-    )
-    if pull.returncode != 0 or not raw.exists():
-        raise MediaError(pull.stderr[-500:] or "yt-dlp failed")
+    last_err = ""
+    raw: Path | None = None
+    for extra in _pull_strategies(source_url):
+        pull = _run(
+            [
+                yt_dlp,
+                "-f",
+                "bv*+ba/b",
+                "--merge-output-format",
+                "mp4",
+                "-o",
+                str(raw_template),
+                *extra,
+                source_url,
+            ]
+        )
+        raw = _find_raw(dest, stem)
+        if pull.returncode == 0 and raw is not None:
+            break
+        last_err = (pull.stderr or pull.stdout or "yt-dlp failed")[-800:]
+        raw = None
+
+    if raw is None:
+        code = "source_bot_check" if is_source_block(last_err) else "download_failed"
+        raise MediaError(source_block_message(source_url, last_err), code=code)
 
     _transcode(ffmpeg, raw, vertical, "1080:1920", start, duration)
     _transcode(ffmpeg, raw, landscape, "1920:1080", start, duration)
@@ -159,7 +252,7 @@ def _transcode(
     ]
     result = _run(cmd)
     if result.returncode != 0 or not dest.exists():
-        raise MediaError(result.stderr[-500:] or f"ffmpeg failed for {dest.name}")
+        raise MediaError(result.stderr[-500:] or f"ffmpeg failed for {dest.name}", code="transcode_failed")
 
 
 def _public_record(buyer_id: str, record: dict[str, Any]) -> dict[str, Any]:

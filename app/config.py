@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 # Single source of truth. Landing, /buy, /admin, and CTAs read this.
-PRICE_USD = 997
+PRICE_USD = 297
 PRICE_LABEL = f"${PRICE_USD} once"
 CTA_LABEL = f"Get the MCP link · ${PRICE_USD}"
 

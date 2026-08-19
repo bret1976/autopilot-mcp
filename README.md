@@ -8,9 +8,9 @@ scan a viral AI-filmmaking original → download it → trim under 60s → write
 16:9 for LinkedIn and X.  
 YouTube titles include `#Shorts`.
 
-This is not a dashboard. People do not log into 6Frame to run Autopilot.
+Buyers work inside the LLM they already pay for. They paste one URL. They do not learn a 6Frame app.
 
-**Price: `$997` once** — set in `app/config.py` as `PRICE_USD`. Landing, `/buy`, and `/admin` all read that constant.
+**Price: `$297` once** — set in `app/config.py` as `PRICE_USD`. Landing, `/buy`, and `/admin` all read that constant.
 
 Owner: Bret Jenny / 6Frame Studio.
 

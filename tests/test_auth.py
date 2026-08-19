@@ -14,24 +14,38 @@ from app.main import app
 from app.mcp_server import mcp
 from app.tokens import mint_token, verify_token
 
+BANNED = (
+    "Becker",
+    "Hyros",
+    "all-in-one platform",
+    "start a free trial",
+    "free trial",
+    "Cormorant",
+    "$997",
+)
 
-def test_price_is_997() -> None:
-    assert PRICE_USD == 997
+
+def test_price_is_297() -> None:
+    assert PRICE_USD == 297
 
 
 def test_health_and_landing() -> None:
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
-        assert health.json()["price"] == 997
+        assert health.json()["price"] == 297
         page = client.get("/")
         assert page.status_code == 200
-        assert "$997" in page.text
-        assert "$297" not in page.text
-        assert "Cormorant" not in page.text
-        assert "Get access · $297" not in page.text
-        assert "SEQ 01" in page.text
-        assert "9:16" in page.text
+        text = page.text
+        assert "$297" in text
+        assert "Get the MCP link" in text
+        assert "What you are actually buying" in text
+        assert "Three steps. No install. No new app." in text
+        assert "Run Autopilot for my studio." in text
+        assert "9:16" in text
+        assert "People are not going to work via softwares anymore" in text
+        for phrase in BANNED:
+            assert phrase not in text
 
 
 def test_mcp_requires_license() -> None:
@@ -83,4 +97,4 @@ def test_lead_endpoint() -> None:
         res = client.post("/api/leads", json={"email": "buyer@studio.test", "studio": "North Light"})
         assert res.status_code == 200
         assert "Bret will send your private MCP URL" in res.json()["message"]
-        assert res.json()["price"] == 997
+        assert res.json()["price"] == 297

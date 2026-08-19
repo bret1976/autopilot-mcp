@@ -93,7 +93,7 @@ async def _speak(text: str, dest: Path) -> None:
                 "[0:a]highpass=f=80,lowpass=f=9800,"
                 "acompressor=threshold=-18dB:ratio=2.2:attack=16:release=120:makeup=6,"
                 "aecho=0.88:0.8:16:0.04,"
-                "volume=3.5dB,"
+                "volume=7.5dB,"
                 "alimiter=limit=0.96[v];"
                 "[1:a]volume=0.015[n];"
                 "[v][n]amix=inputs=2:duration=first:dropout_transition=0,"

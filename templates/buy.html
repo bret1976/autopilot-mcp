@@ -3,49 +3,41 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Checkout — 6Frame Autopilot · ${{ price }} once</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,500&family=Manrope:wght@400;500;600&display=swap"/>
+  <title>Get the MCP link · ${{ price }} — 6Frame Autopilot</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap"/>
   <link rel="stylesheet" href="/assets/page.css"/>
 </head>
 <body>
   <div class="shell buy">
-    <p class="kicker">Checkout</p>
-    <h1>6Frame Autopilot · ${{ price }} once</h1>
-    <p class="lede">Pay once. We email your private MCP URL. Paste it into Claude, Claude Code, Cursor, ChatGPT, or Codex. That is the whole install.</p>
-
+    <a class="ghost" href="/" style="margin-left:0">← Autopilot</a>
+    <p class="kicker">Order · no card on this page</p>
+    <h1 style="font-size:clamp(42px,7vw,72px);margin:8px 0 14px">{{ cta }}</h1>
+    <p class="lede">${{ price }} once. Access to the locked spine — a signed URL you paste into Claude, Codex, or Cursor.</p>
     {% if submitted %}
     <div class="ok">
-      <strong style="color:var(--ink)">You are in line.</strong>
-      <p>Signed MCP link after payment. We will send payment instructions to {{ order.email }}. No card was charged on this page.</p>
+      <strong>You are in line.</strong>
+      <p>Signed MCP link after payment. Instructions go to {{ order.email }}. No card was charged here.</p>
     </div>
-    <p><a href="/">Back to 6Frame Autopilot</a></p>
     {% else %}
-    <form class="card" method="post" action="/api/orders">
+    <form method="post" action="/api/orders">
       <label for="name">Name</label>
-      <input id="name" name="name" type="text" required placeholder="Alex Rivera"/>
-
+      <input id="name" name="name" required placeholder="Your name"/>
       <label for="email">Email — where the MCP link arrives</label>
       <input id="email" name="email" type="email" required placeholder="you@studio.com"/>
-
       <label for="client">Where will you run it?</label>
       <select id="client" name="client" required>
-        <option value="Claude.ai">Claude.ai</option>
-        <option value="Claude Code">Claude Code</option>
-        <option value="ChatGPT">ChatGPT</option>
-        <option value="Cursor">Cursor</option>
-        <option value="Codex">Codex</option>
-        <option value="Not sure">Not sure</option>
+        <option>Claude.ai</option>
+        <option>Claude Code</option>
+        <option>ChatGPT</option>
+        <option>Cursor</option>
+        <option>Codex</option>
+        <option>Not sure</option>
       </select>
-
-      <label for="studio">Studio name (optional)</label>
-      <input id="studio" name="studio" type="text" placeholder="6Frame-style studio"/>
-
-      <button class="btn big" type="submit">Request the ${{ price }} link</button>
-      <p class="fine">After this form we send payment instructions. No card is charged on this page. You only get the signed URL after payment.</p>
+      <label for="studio">Studio (optional)</label>
+      <input id="studio" name="studio" placeholder="Your studio"/>
+      <button class="plate" type="submit" style="margin-top:22px">Request the ${{ price }} link</button>
+      <p class="lede" style="margin-top:16px">After this form we send payment instructions. No card is charged on this page.</p>
     </form>
-    {% if payment_link %}
-    <p class="fine">If Bret already sent a Stripe link: <a href="{{ payment_link }}">pay ${{ price }} once</a>.</p>
-    {% endif %}
     {% endif %}
   </div>
 </body>

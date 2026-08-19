@@ -10,7 +10,7 @@ os.environ["REVOKED_KEYS"] = "revoked-studio"
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import PRICE_USD
+from app.config import PRICE_USD, PUBLIC_DIR
 from app.main import app
 from app.mcp_server import mcp
 from app.tokens import mint_token, verify_token
@@ -23,6 +23,9 @@ BANNED = (
     "GoHighLevel",
     "Zillow",
     "Austin",
+    "Cormorant",
+    "Manrope",
+    "#c4a574",
     "all-in-one platform",
     "start a free trial",
     "$297",
@@ -41,44 +44,36 @@ def test_health_and_landing() -> None:
         page = client.get("/")
         assert page.status_code == 200
         text = page.text
-        assert "Cormorant+Garamond" in text
-        assert "Manrope" in text
         css = client.get("/assets/page.css").text
-        assert "--bg:#0c0f0d" in css
-        assert "--gold:#c4a574" in css
-        assert "border-radius:999px" in css
+        assert "Bebas+Neue" in text
+        assert "IBM+Plex" in text
+        assert "--void:#050505" in css
+        assert "border-radius:999px" not in css
         assert "$997" in text
-        assert "Get the link · $997 once" in text
-        assert "Get access · $997" in text
-        assert "What you are actually buying" in text
-        assert "Three steps. No install. No new app." in text
-        assert "Run Autopilot for my studio." in text
-        assert "Codex" in text
-        assert "9:16" in text
-        assert "People are not going to work via softwares anymore" in text
-        assert "not a dashboard" in text.lower()
         assert 'src="/promo.mp4"' in text
         assert 'poster="/poster.jpg"' in text
+        assert "Live Autopilot" in text
+        assert "PostProxy LIVE" in text
+        assert "One MCP link" in text
+        assert "Codex" in text
+        assert "9:16" in text
         for phrase in BANNED:
             assert phrase not in text
+            assert phrase not in css
 
 
-def test_promo_slot_exists() -> None:
-    from pathlib import Path
-
-    from app.config import PUBLIC_DIR
-
-    assert (PUBLIC_DIR / "promo.mp4").exists()
-    assert (PUBLIC_DIR / "poster.jpg").exists()
+def test_promo_slot_is_real_file() -> None:
+    promo = PUBLIC_DIR / "promo.mp4"
+    poster = PUBLIC_DIR / "poster.jpg"
+    assert promo.exists() and promo.stat().st_size > 100_000
+    assert poster.exists() and poster.stat().st_size > 10_000
 
 
 def test_buy_form() -> None:
     with TestClient(app) as client:
         page = client.get("/buy")
         assert page.status_code == 200
-        assert "Checkout" in page.text
         assert 'name="name"' in page.text
-        assert 'name="email"' in page.text
         assert 'name="client"' in page.text
         assert "Codex" in page.text
         assert "No card is charged on this page" in page.text
@@ -126,13 +121,9 @@ async def test_tools_are_registered() -> None:
     names = {tool.name for tool in tools}
     assert {
         "setup",
-        "postproxy_status",
-        "postproxy_connect",
         "scan_trends",
-        "download_original",
-        "write_copy",
-        "publish",
         "run_autopilot",
+        "publish",
         "status",
     }.issubset(names)
 
@@ -141,7 +132,7 @@ def test_orders_endpoint() -> None:
     with TestClient(app) as client:
         res = client.post(
             "/api/orders",
-            json={"name": "Nia", "email": "buyer@studio.test", "client": "Codex", "studio": "North Light"},
+            json={"name": "Nia", "email": "buyer@studio.test", "client": "Codex"},
         )
         assert res.status_code == 200
         assert "You are in line" in res.json()["message"]

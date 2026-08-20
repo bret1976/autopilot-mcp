@@ -91,7 +91,7 @@ Hashtag caps: LinkedIn/Facebook 5–8, IG/TikTok/YouTube 8–12, X 1–2 on the 
 | `ADMIN_SECRET` | Password for `/admin` seller desk. |
 | `REVOKED_KEYS` | Comma-separated buyer ids or full tokens to reject at `/mcp`. |
 | `YTDLP_COOKIES_FILE` or `YTDLP_COOKIES_B64` | Optional YouTube cookies so Railway can pull source clips YouTube bot-walls. |
-| `DATA_DIR` | Buyer JSON, orders, media. Mount a volume. |
+| `DATA_DIR` | Buyer JSON, orders, media. Must be a Railway volume (production uses `/data`). Without a volume every deploy wipes Gemini/PostProxy keys. |
 | `PORT` | Default 8080. |
 | `STRIPE_PAYMENT_LINK` | Optional. `/buy` still does not collect a card. |
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -263,7 +264,8 @@ async def run_autopilot(
         start = float(scan.get("suggested_start") or 0)
         duration = float(scan.get("suggested_duration") or MAX_CLIP_SECONDS)
         try:
-            media = download_and_cut(
+            media = await asyncio.to_thread(
+                download_and_cut,
                 record["buyer_id"],
                 url,
                 start=start,

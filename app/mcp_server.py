@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextvars import ContextVar
 from typing import Any
 
@@ -8,7 +9,7 @@ from starlette.requests import Request
 
 from app.config import ONBOARD_PLATFORMS, public_base_url
 from app import postproxy
-from app.jobs import buyer_job, is_busy
+from app.jobs import is_busy, load_job, spawn_job
 from app.media import MediaError, download_and_cut
 from app.onboard import blocked, fetch_brand_from_website, readiness
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
@@ -40,7 +41,9 @@ mcp = FastMCP(
         "Do not tell them publishing is blocked. Call run_autopilot again without "
         "source_url so we pick another original. "
         "Never call scan_trends and run_autopilot in the same turn. "
-        "If you already have a source_url, call run_autopilot with that URL only."
+        "If you already have a source_url, call run_autopilot with that URL only. "
+        "scan_trends, download_original, write_copy, publish, and run_autopilot "
+        "return immediately with started=true. Poll status until job.status is ok or error."
     ),
 )
 
@@ -266,11 +269,14 @@ async def scan_trends_tool(niche: str = "", exclude_urls: list[str] | None = Non
     gate = blocked(record, need="scan")
     if gate:
         return gate
-    async with buyer_job(record["buyer_id"]) as busy:
-        if busy:
-            return busy
-        scan = await scan_trends(record, niche=niche, mock=False, exclude_urls=exclude_urls)
+    buyer_id = record["buyer_id"]
+
+    async def _job() -> dict[str, Any]:
+        bind_buyer(buyer_id)
+        scan = await scan_trends(load_buyer(buyer_id) or record, niche=niche, mock=False, exclude_urls=exclude_urls)
         return {"ok": True, "scan": scan}
+
+    return spawn_job(buyer_id, "scan_trends", _job, {"niche": niche})
 
 
 @mcp.tool
@@ -281,27 +287,30 @@ async def download_original(
 ) -> dict[str, Any]:
     """Download the original with yt-dlp and cut two masters: 9:16 and 16:9, under 60s."""
     record = current_record()
-    try:
-        media = download_and_cut(
-            record["buyer_id"],
-            source_url,
-            start=start,
-            duration=duration,
-            mock=False,
-        )
-    except MediaError as exc:
-        return {
-            "ok": False,
-            "step": "download",
-            "code": exc.code,
-            "source_url": source_url,
-            "say_to_user": str(exc),
-            "next": (
-                "Call run_autopilot without source_url, or scan_trends with this URL in "
-                "exclude_urls. Do not say their YouTube channel is disconnected."
-            ),
-        }
-    return {"ok": True, "media": media}
+    buyer_id = record["buyer_id"]
+
+    async def _job() -> dict[str, Any]:
+        bind_buyer(buyer_id)
+        try:
+            media = await asyncio.to_thread(
+                download_and_cut,
+                buyer_id,
+                source_url,
+                start=start,
+                duration=duration,
+                mock=False,
+            )
+        except MediaError as exc:
+            return {
+                "ok": False,
+                "step": "download",
+                "code": exc.code,
+                "source_url": source_url,
+                "say_to_user": str(exc),
+            }
+        return {"ok": True, "media": media}
+
+    return spawn_job(buyer_id, "download_original", _job, {"source_url": source_url})
 
 
 @mcp.tool(name="write_copy")
@@ -324,11 +333,14 @@ async def write_copy_tool(
         "topic_tags": topic_tags or [],
         "source_url": source_url,
     }
-    async with buyer_job(record["buyer_id"]) as busy:
-        if busy:
-            return busy
-        copy = await write_copy(record, scan, mock=False)
+    buyer_id = record["buyer_id"]
+
+    async def _job() -> dict[str, Any]:
+        bind_buyer(buyer_id)
+        copy = await write_copy(load_buyer(buyer_id) or record, scan, mock=False)
         return {"ok": True, "copy": copy}
+
+    return spawn_job(buyer_id, "write_copy", _job)
 
 
 @mcp.tool
@@ -352,8 +364,14 @@ async def publish(
         "captions": captions,
     }
     media = {"vertical_url": vertical_url, "landscape_url": landscape_url}
-    result = await publish_cut(record, copy, media, mock=False, draft=draft)
-    return {"ok": True, **result}
+    buyer_id = record["buyer_id"]
+
+    async def _job() -> dict[str, Any]:
+        bind_buyer(buyer_id)
+        result = await publish_cut(load_buyer(buyer_id) or record, copy, media, mock=False, draft=draft)
+        return {"ok": True, **result}
+
+    return spawn_job(buyer_id, "publish", _job)
 
 
 @mcp.tool(name="run_autopilot")
@@ -378,12 +396,13 @@ async def run_autopilot_tool(
     gate = blocked(record, need="run")
     if gate:
         return gate
-    async with buyer_job(record["buyer_id"]) as busy:
-        if busy:
-            return busy
+    buyer_id = record["buyer_id"]
+
+    async def _job() -> dict[str, Any]:
+        bind_buyer(buyer_id)
         try:
             return await run_autopilot(
-                record,
+                load_buyer(buyer_id) or record,
                 niche=niche,
                 source_url=source_url,
                 mock=False,
@@ -395,11 +414,9 @@ async def run_autopilot_tool(
                 "step": "download",
                 "code": exc.code,
                 "say_to_user": str(exc),
-                "next": (
-                    "Source fetch failed, not YouTube publishing. "
-                    "Run again without source_url so we pick a TikTok or Short instead of a long YouTube talk."
-                ),
             }
+
+    return spawn_job(buyer_id, "run_autopilot", _job, {"source_url": source_url, "niche": niche})
 
 
 @mcp.tool
@@ -408,6 +425,7 @@ async def status() -> dict[str, Any]:
     record = current_record()
     payload = _onboard_payload(record)
     payload["last_run"] = record.get("last_run")
+    payload["job"] = load_job(record["buyer_id"])
     payload["busy"] = is_busy(record["buyer_id"])
     payload["defaults"]["platforms"] = list(record.get("platforms") or ONBOARD_PLATFORMS)
     return payload

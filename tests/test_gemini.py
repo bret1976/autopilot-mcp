@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 
 os.environ.setdefault("MCP_ISSUER_SECRET", "test-issuer-secret")
@@ -10,7 +11,7 @@ import pytest
 
 from app.config import GEMINI_COPY_MODELS, GEMINI_SCAN_MODELS, GEMINI_TIMEOUT_SECONDS
 from app.gemini import generate_text
-from app.jobs import BUSY, buyer_job
+from app.jobs import load_job, save_job, spawn_job
 from app.mcp_server import bind_buyer, run_autopilot_tool, scan_trends_tool
 from app.store import ensure_buyer, save_buyer
 
@@ -74,12 +75,19 @@ async def test_busy_lock_rejects_stacked_scan_and_run() -> None:
         }
     )
     assert record["buyer_id"] == "busy-studio"
-    async with buyer_job("busy-studio") as first:
-        assert first is None
-        stacked = await scan_trends_tool()
-        assert stacked["busy"] is True
-        assert stacked["ok"] is False
-        assert "same time" in stacked["say_to_user"]
-        run = await run_autopilot_tool()
-        assert run["busy"] is True
-    assert BUSY["busy"] is True
+
+    async def hang() -> dict:
+        await asyncio.sleep(30)
+        return {"ok": True}
+
+    first = spawn_job("busy-studio", "scan_trends", hang)
+    assert first["started"] is True
+    stacked = await scan_trends_tool()
+    assert stacked["busy"] is True
+    assert stacked["started"] is False
+    run = await run_autopilot_tool()
+    assert run["busy"] is True
+    job = load_job("busy-studio")
+    assert job is not None
+    job["status"] = "ok"
+    save_job(job)

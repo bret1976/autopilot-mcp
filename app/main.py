@@ -23,6 +23,7 @@ from app.config import (
     TEMPLATES_DIR,
     THEORY_VIDEO_URL,
     admin_secret,
+    data_dir,
     public_base_url,
     stripe_payment_link,
 )
@@ -118,7 +119,21 @@ def _wants_html(request: Request) -> bool:
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "product": PRODUCT_NAME, "price": PRICE_USD}
+    root = data_dir()
+    writable = False
+    try:
+        marker = root / ".writable"
+        marker.write_text("ok", encoding="utf-8")
+        writable = marker.exists()
+    except OSError:
+        writable = False
+    return {
+        "ok": True,
+        "product": PRODUCT_NAME,
+        "price": PRICE_USD,
+        "data_dir": str(root),
+        "data_dir_writable": writable,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)

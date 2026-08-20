@@ -56,6 +56,7 @@ def test_health_and_landing() -> None:
         health = client.get("/health")
         assert health.status_code == 200
         assert health.json()["price"] == 997
+        assert health.json()["data_dir_writable"] is True
         page = client.get("/")
         assert page.status_code == 200
         text = page.text

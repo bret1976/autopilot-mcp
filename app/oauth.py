@@ -116,7 +116,9 @@ async def oauth_protected_resource(request: Request):
 
 
 @router.get("/.well-known/oauth-authorization-server")
+@router.get("/.well-known/oauth-authorization-server/{rest:path}")
 @router.get("/.well-known/openid-configuration")
+@router.get("/.well-known/openid-configuration/{rest:path}")
 async def oauth_authorization_server(request: Request):
     return JSONResponse(authorization_server_metadata(request))
 
@@ -191,13 +193,21 @@ def _authorize_html(request: Request, error: str = "") -> HTMLResponse:
     )
 
 
-@router.get("/oauth/authorize")
-async def oauth_authorize_form(request: Request):
-    hint = token_from_paste(
+def _authorize_hint(request: Request) -> str | None:
+    """Grok starts OAuth with resource=https://host/mcp/t/TOKEN and no login form."""
+    return token_from_paste(
         request.query_params.get("login_hint")
         or request.query_params.get("token")
         or request.query_params.get("license")
+        or request.query_params.get("resource")
+        or request.headers.get("x-mcp-token")
+        or request.url.path
     )
+
+
+@router.get("/oauth/authorize")
+async def oauth_authorize_form(request: Request):
+    hint = _authorize_hint(request)
     if hint and verify_token(hint) and request.query_params.get("redirect_uri"):
         return _issue_code_redirect(
             license_token=hint,

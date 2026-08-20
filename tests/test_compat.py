@@ -119,6 +119,12 @@ def test_well_known_oauth_discovery() -> None:
         under_token = client.get(f"/mcp/t/{token}/.well-known/oauth-protected-resource")
         assert under_token.status_code == 200
         assert under_token.json()["resource"].endswith(f"/mcp/t/{token}")
+        rfc9728 = client.get(f"/.well-known/oauth-protected-resource/mcp/t/{token}")
+        assert rfc9728.status_code == 200
+        assert rfc9728.json()["resource"].endswith(f"/mcp/t/{token}")
+        authz_suffix = client.get(f"/.well-known/oauth-authorization-server/mcp/t/{token}")
+        assert authz_suffix.status_code == 200
+        assert authz_suffix.json()["authorization_endpoint"].endswith("/oauth/authorize")
         appended = client.get(f"/mcp/t/{token}/mcp", headers={"Accept": "*/*"})
         assert appended.status_code == 200
         assert appended.json()["mcp"] is True
@@ -192,6 +198,63 @@ def test_oauth_license_exchange() -> None:
         )
         assert live.status_code == 200
         assert live.json()["result"]["capabilities"] is not None
+
+
+def test_oauth_silent_when_resource_already_has_token() -> None:
+    token = mint_token("silent-studio")
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    with TestClient(app, follow_redirects=False) as client:
+        registered = client.post(
+            "/oauth/register",
+            json={"client_name": "Grok", "redirect_uris": ["https://grok.com/oauth/callback"]},
+        )
+        client_id = registered.json()["client_id"]
+        silent = client.get(
+            "/oauth/authorize",
+            params={
+                "client_id": client_id,
+                "redirect_uri": "https://grok.com/oauth/callback",
+                "response_type": "code",
+                "state": "xyz",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "resource": f"https://autopilot.example/mcp/t/{token}",
+            },
+        )
+        assert silent.status_code == 302, silent.text[:300]
+        location = silent.headers["location"]
+        assert "code=" in location
+        code = location.split("code=", 1)[1].split("&", 1)[0]
+        exchanged = client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": "https://grok.com/oauth/callback",
+                "code_verifier": verifier,
+                "client_id": client_id,
+            },
+        )
+        assert exchanged.status_code == 200
+        assert exchanged.json()["access_token"] == token
+
+
+def test_both_accept_initialize_is_json_not_sse() -> None:
+    token = mint_token("both-json")
+    with TestClient(app) as client:
+        res = client.post(
+            f"/mcp/t/{token}",
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json",
+                "Origin": "https://grok.com",
+            },
+            json=INIT,
+        )
+        assert res.status_code == 200
+        assert "application/json" in res.headers.get("content-type", "")
+        assert res.json()["result"]["serverInfo"]["name"] == "TrendPilot"
 
 
 def test_get_probe_is_200_not_405() -> None:

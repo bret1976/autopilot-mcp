@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from urllib.parse import unquote
@@ -9,13 +8,14 @@ from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-_TOKEN_PATH = re.compile(r"^/mcp/t/([^/]+)/?$")
+_TOKEN_PATH = re.compile(r"^/mcp/t/([^/]+)(?P<rest>/.*)?$")
 
 
 class TokenPathMiddleware:
     """Grok and some hosts strip ?token=. Keep the license in the path instead.
 
     /mcp/t/{token} is rewritten to /mcp/ with the token on the query and header.
+    Hosts also GET /mcp/t/{token}/.well-known/... when adding a connector.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -27,10 +27,15 @@ class TokenPathMiddleware:
             match = _TOKEN_PATH.match(path)
             if match:
                 token = unquote(match.group(1))
+                rest = match.group("rest") or ""
+                if rest.startswith("/.well-known/"):
+                    new_path = rest
+                else:
+                    new_path = "/mcp/"
                 scope = dict(scope)
-                scope["path"] = "/mcp/"
+                scope["path"] = new_path
                 if "raw_path" in scope:
-                    scope["raw_path"] = b"/mcp/"
+                    scope["raw_path"] = new_path.encode("latin-1")
                 extra = f"token={token}".encode("latin-1")
                 existing = scope.get("query_string") or b""
                 scope["query_string"] = extra if not existing else existing + b"&" + extra
@@ -88,6 +93,11 @@ def mcp_probe_payload() -> dict:
         "allow": ["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
         "hint": "This URL is a Streamable HTTP MCP server. POST JSON-RPC initialize here. GET without text/event-stream is a connector probe.",
         "first_tool": "onboard",
+        "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "TrendPilot", "title": PRODUCT_NAME},
+        },
     }
 
 
@@ -120,8 +130,8 @@ class McpGetProbeMiddleware:
     """Stateless FastMCP does not register GET. Other hosts still hit this URL.
 
     Licensed GET/HEAD probe (JSON, */*, or both) → 200 JSON, body closed.
-    EventSource GET (text/event-stream only, or Last-Event-ID) → keep-alive SSE.
-    JSON-RPC stays on POST. Never fall through to FastMCP 405. Never hang a probe.
+    EventSource GET → a short finished SSE document (hosts time out if we hold it).
+    JSON-RPC stays on POST. Never fall through to FastMCP 405. Never hang a GET.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -185,35 +195,7 @@ async def _send_sse_keepalive(receive: Receive, send: Send, method: str) -> None
     if method == "HEAD":
         await send({"type": "http.response.body", "body": b""})
         return
-    await send({"type": "http.response.body", "body": b": connected\n\n", "more_body": True})
-    disconnected = asyncio.Event()
-
-    async def watch() -> None:
-        try:
-            while True:
-                message = await receive()
-                if message.get("type") == "http.disconnect":
-                    disconnected.set()
-                    return
-        except Exception:  # noqa: BLE001
-            disconnected.set()
-
-    watcher = asyncio.create_task(watch())
-    try:
-        while not disconnected.is_set():
-            try:
-                await asyncio.wait_for(disconnected.wait(), timeout=15)
-            except asyncio.TimeoutError:
-                try:
-                    await send({"type": "http.response.body", "body": b": keepalive\n\n", "more_body": True})
-                except Exception:  # noqa: BLE001
-                    break
-    finally:
-        watcher.cancel()
-        try:
-            await send({"type": "http.response.body", "body": b"", "more_body": False})
-        except Exception:  # noqa: BLE001
-            pass
+    await send({"type": "http.response.body", "body": b": connected\n\n", "more_body": False})
 
 
 class AcceptCompatMiddleware:

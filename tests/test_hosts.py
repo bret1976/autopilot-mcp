@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 
 os.environ.setdefault("MCP_ISSUER_SECRET", "test-issuer-secret")
 os.environ.setdefault("DATA_DIR", "/tmp/autopilot-mcp-host-tests")
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -227,38 +225,14 @@ def test_connector_probe_get_finishes_with_json() -> None:
             assert "application/json" in probe.headers.get("content-type", "")
             assert probe.json()["mcp"] is True
             assert probe.json()["server"]["name"] == "TrendPilot"
+            assert probe.json()["result"]["serverInfo"]["name"] == "TrendPilot"
 
 
-@pytest.mark.asyncio
-async def test_eventsource_get_is_sse() -> None:
+def test_eventsource_get_finishes() -> None:
     token = mint_token("sse-host")
     path = f"/mcp/t/{token}"
-    scope = {
-        "type": "http",
-        "asgi": {"version": "3.0"},
-        "http_version": "1.1",
-        "method": "GET",
-        "scheme": "http",
-        "path": path,
-        "raw_path": path.encode(),
-        "query_string": b"",
-        "headers": [(b"accept", b"text/event-stream"), (b"host", b"test")],
-        "client": ("testclient", 50000),
-        "server": ("test", 80),
-    }
-    messages: list[dict] = []
-
-    async def receive():
-        await asyncio.sleep(0.05)
-        return {"type": "http.disconnect"}
-
-    async def send(message):
-        messages.append(message)
-
-    await asyncio.wait_for(app(scope, receive, send), timeout=2)
-    start = next(item for item in messages if item["type"] == "http.response.start")
-    headers = {key.decode(): value.decode() for key, value in start["headers"]}
-    assert start["status"] == 200
-    assert "text/event-stream" in headers["content-type"]
-    body = b"".join(item.get("body") or b"" for item in messages if item["type"] == "http.response.body")
-    assert body.startswith(b":")
+    with TestClient(app) as client:
+        res = client.get(path, headers={"Accept": "text/event-stream"})
+        assert res.status_code == 200
+        assert "text/event-stream" in res.headers.get("content-type", "")
+        assert res.text.startswith(":")

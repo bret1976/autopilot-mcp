@@ -2,14 +2,12 @@
 """Live host-shaped audit. Set MCP_AUDIT_URL to the path license URL."""
 from __future__ import annotations
 
-import http.client
 import json
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse
 
 HOST = os.environ.get("MCP_AUDIT_HOST", "https://autopilot-mcp-production-c6f7.up.railway.app").rstrip("/")
 TOKEN = os.environ.get("MCP_AUDIT_TOKEN", "")
@@ -112,29 +110,26 @@ def main() -> int:
         f"ok={body.get('ok')} ctype={headers.get('Content-Type') or headers.get('content-type')}",
     )
 
-    started = time.time()
-    parsed = urlparse(PATH)
-    conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=6)
-    try:
-        conn.request(
-            "GET",
-            parsed.path + (f"?{parsed.query}" if parsed.query else ""),
-            headers={"Accept": "text/event-stream"},
-        )
-        resp = conn.getresponse()
-        chunk = resp.read(13)
-        sse_status, sse_ctype = resp.status, resp.getheader("Content-Type") or ""
-    except Exception as exc:  # noqa: BLE001
-        sse_status, sse_ctype, chunk = 0, "", str(exc).encode()
-    finally:
-        conn.close()
+    status, headers, raw, elapsed = req("GET", PATH, headers={"Accept": "text/event-stream"})
+    ctype = headers.get("Content-Type") or headers.get("content-type") or ""
     note(
         "GET EventSource SSE-only",
-        sse_status == 200 and "text/event-stream" in sse_ctype,
-        sse_status,
-        time.time() - started,
-        f"ctype={sse_ctype[:48]} body={chunk[:40]!r}",
+        status == 200 and elapsed < 3 and ("text/event-stream" in ctype or parse(raw).get("ok") is True),
+        status,
+        elapsed,
+        f"ctype={ctype[:48]} body={raw[:40]!r}",
     )
+
+    if TOKEN:
+        status, _, raw, elapsed = req("GET", f"{PATH}/.well-known/oauth-protected-resource")
+        meta = parse(raw)
+        note(
+            "GET path/.well-known",
+            status == 200 and TOKEN in str(meta.get("resource") or ""),
+            status,
+            elapsed,
+            f"resource={str(meta.get('resource') or '')[-48:]}",
+        )
 
     status, headers, raw, elapsed = req("HEAD", PATH)
     note("HEAD path token", status == 200, status, elapsed, f"allow={headers.get('Allow') or headers.get('allow')}")

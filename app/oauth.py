@@ -77,8 +77,13 @@ def _redirect_ok(uri: str) -> bool:
 
 
 def protected_resource_metadata(request: Request) -> dict[str, Any]:
+    from app.tokens import extract_token, verify_token
+
     base = request_base(request)
-    resource = request.query_params.get("resource") or f"{base}/mcp"
+    token = extract_token(request)
+    parsed = verify_token(token) if token else None
+    default = f"{base}/mcp/t/{parsed.raw}" if parsed else f"{base}/mcp"
+    resource = request.query_params.get("resource") or default
     return {
         "resource": resource,
         "authorization_servers": [base],

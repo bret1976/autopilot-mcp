@@ -115,6 +115,13 @@ def test_well_known_oauth_discovery() -> None:
         under_mcp = client.get("/mcp/.well-known/oauth-protected-resource")
         assert under_mcp.status_code == 200
         assert under_mcp.json()["resource"].endswith("/mcp")
+        token = mint_token("wk-path")
+        under_token = client.get(f"/mcp/t/{token}/.well-known/oauth-protected-resource")
+        assert under_token.status_code == 200
+        assert under_token.json()["resource"].endswith(f"/mcp/t/{token}")
+        appended = client.get(f"/mcp/t/{token}/mcp", headers={"Accept": "*/*"})
+        assert appended.status_code == 200
+        assert appended.json()["mcp"] is True
 
 
 def test_oauth_license_exchange() -> None:

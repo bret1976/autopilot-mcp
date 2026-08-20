@@ -44,16 +44,6 @@ async def test_run_autopilot_skips_bot_walled_source(monkeypatch) -> None:
     record = save_buyer(record)
     scans = [
         {
-            "title": "TEDx talk",
-            "source_url": "https://www.youtube.com/watch?v=tedxfail",
-            "platform": "youtube",
-            "why": "talk",
-            "topic_tags": ["AI"],
-            "suggested_start": 0,
-            "suggested_duration": 45,
-            "notes": "long",
-        },
-        {
             "title": "Short reel",
             "source_url": "https://www.tiktok.com/@x/video/1",
             "platform": "tiktok",
@@ -64,8 +54,10 @@ async def test_run_autopilot_skips_bot_walled_source(monkeypatch) -> None:
             "notes": "keep the cut",
         },
     ]
+    scan_calls = {"n": 0}
 
     async def fake_scan(record, niche="", mock=False, exclude_urls=None):
+        scan_calls["n"] += 1
         return scans.pop(0)
 
     def fake_download(buyer_id, url, **kwargs):
@@ -103,5 +95,49 @@ async def test_run_autopilot_skips_bot_walled_source(monkeypatch) -> None:
     result = await run_autopilot(record, source_url="https://www.youtube.com/watch?v=tedxfail")
     assert result["ok"] is True
     assert result["media"]["source_url"] == "https://www.tiktok.com/@x/video/1"
+    assert scan_calls["n"] == 1
     assert result["skipped_sources"][0]["code"] == "source_bot_check"
     assert "not your YouTube channel" in result["skipped_sources"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_pinned_source_skips_scan(monkeypatch) -> None:
+    record = ensure_buyer("pinned-studio", email="pin@studio.test")
+    record["platforms"] = ["linkedin"]
+    record = save_buyer(record)
+    scan_calls = {"n": 0}
+
+    async def fake_scan(*args, **kwargs):
+        scan_calls["n"] += 1
+        raise AssertionError("scan_trends should not run when source_url is pinned")
+
+    def fake_download(buyer_id, url, **kwargs):
+        return {
+            "source_url": url,
+            "vertical": "cut-9x16.mp4",
+            "landscape": "cut-16x9.mp4",
+            "vertical_url": "https://example.test/v",
+            "landscape_url": "https://example.test/l",
+        }
+
+    async def fake_copy(record, scan, mock=False):
+        return {
+            "title": "pinned",
+            "youtube_title": "pinned #Shorts",
+            "topic_tags": [],
+            "captions": {"linkedin": "body"},
+        }
+
+    async def fake_publish(record, copy, media, mock=False, draft=False):
+        return {"mocked": True, "batches": {}, "posts": []}
+
+    monkeypatch.setattr("app.spine.scan_trends", fake_scan)
+    monkeypatch.setattr("app.spine.download_and_cut", fake_download)
+    monkeypatch.setattr("app.spine.write_copy", fake_copy)
+    monkeypatch.setattr("app.spine.publish_cut", fake_publish)
+
+    result = await run_autopilot(record, source_url="https://www.tiktok.com/@x/video/9")
+    assert result["ok"] is True
+    assert scan_calls["n"] == 0
+    assert result["scan"]["scanned"] is False
+    assert result["media"]["source_url"] == "https://www.tiktok.com/@x/video/9"

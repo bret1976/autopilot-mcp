@@ -56,10 +56,11 @@ DEFAULT_BRAND_VOICE = (
     "Prefer craft language: frame, cut, light, tempo, voice."
 )
 
-GEMINI_MODELS = (
-    "gemini-3.1-pro-preview",
-    "gemini-3.6-flash",
-)
+# Buyer keys stay on these two IDs. Grounded scan must finish inside Grok's ~30s tool budget.
+GEMINI_SCAN_MODELS = ("gemini-3.6-flash",)
+GEMINI_COPY_MODELS = ("gemini-3.1-pro-preview", "gemini-3.6-flash")
+GEMINI_MODELS = GEMINI_COPY_MODELS
+GEMINI_TIMEOUT_SECONDS = 22.0
 
 MAX_CLIP_SECONDS = 59
 POSTPROXY_API_BASE = "https://api.postproxy.dev"

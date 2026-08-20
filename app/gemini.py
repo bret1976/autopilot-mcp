@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from app.config import GEMINI_MODELS
+from app.config import GEMINI_COPY_MODELS, GEMINI_TIMEOUT_SECONDS
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.S)
 
@@ -16,9 +16,16 @@ async def generate_json(
     prompt: str,
     *,
     grounded: bool = False,
-    models: tuple[str, ...] = GEMINI_MODELS,
+    models: tuple[str, ...] = GEMINI_COPY_MODELS,
+    timeout: float = GEMINI_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    text = await generate_text(api_key, prompt, grounded=grounded, models=models)
+    text = await generate_text(
+        api_key,
+        prompt,
+        grounded=grounded,
+        models=models,
+        timeout=timeout,
+    )
     return parse_json_object(text)
 
 
@@ -27,20 +34,34 @@ async def generate_text(
     prompt: str,
     *,
     grounded: bool = False,
-    models: tuple[str, ...] = GEMINI_MODELS,
+    models: tuple[str, ...] = GEMINI_COPY_MODELS,
+    timeout: float = GEMINI_TIMEOUT_SECONDS,
 ) -> str:
     if not api_key:
         raise RuntimeError("Gemini API key is not configured. Call setup first.")
     errors: list[str] = []
     for model in models:
         try:
-            return await _call_model(api_key, model, prompt, grounded=grounded)
+            return await _call_model(
+                api_key,
+                model,
+                prompt,
+                grounded=grounded,
+                timeout=timeout,
+            )
         except Exception as exc:  # noqa: BLE001 — try the next Gemini model
             errors.append(f"{model}: {exc}")
     raise RuntimeError("Gemini request failed. " + " | ".join(errors))
 
 
-async def _call_model(api_key: str, model: str, prompt: str, *, grounded: bool) -> str:
+async def _call_model(
+    api_key: str,
+    model: str,
+    prompt: str,
+    *,
+    grounded: bool,
+    timeout: float,
+) -> str:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload: dict[str, Any] = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -48,15 +69,18 @@ async def _call_model(api_key: str, model: str, prompt: str, *, grounded: bool) 
     }
     if grounded:
         payload["tools"] = [{"google_search": {}}]
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        response = await client.post(
-            url,
-            headers={"x-goog-api-key": api_key, "content-type": "application/json"},
-            json=payload,
-        )
-        if response.status_code >= 400:
-            raise RuntimeError(f"HTTP {response.status_code} {response.text[:400]}")
-        data = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                url,
+                headers={"x-goog-api-key": api_key, "content-type": "application/json"},
+                json=payload,
+            )
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"timeout after {int(timeout)}s") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(f"HTTP {response.status_code} {response.text[:400]}")
+    data = response.json()
     parts = (
         data.get("candidates", [{}])[0]
         .get("content", {})

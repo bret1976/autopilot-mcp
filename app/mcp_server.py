@@ -8,6 +8,7 @@ from starlette.requests import Request
 
 from app.config import ONBOARD_PLATFORMS, public_base_url
 from app import postproxy
+from app.jobs import buyer_job, is_busy
 from app.media import MediaError, download_and_cut
 from app.onboard import blocked, fetch_brand_from_website, readiness
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
@@ -37,7 +38,9 @@ mcp = FastMCP(
         "If download fails with source_bot_check, that is YouTube/TikTok blocking "
         "the SOURCE clip fetch — not the buyer's connected YouTube channel. "
         "Do not tell them publishing is blocked. Call run_autopilot again without "
-        "source_url so we pick another original."
+        "source_url so we pick another original. "
+        "Never call scan_trends and run_autopilot in the same turn. "
+        "If you already have a source_url, call run_autopilot with that URL only."
     ),
 )
 
@@ -263,8 +266,11 @@ async def scan_trends_tool(niche: str = "", exclude_urls: list[str] | None = Non
     gate = blocked(record, need="scan")
     if gate:
         return gate
-    scan = await scan_trends(record, niche=niche, mock=False, exclude_urls=exclude_urls)
-    return {"ok": True, "scan": scan}
+    async with buyer_job(record["buyer_id"]) as busy:
+        if busy:
+            return busy
+        scan = await scan_trends(record, niche=niche, mock=False, exclude_urls=exclude_urls)
+        return {"ok": True, "scan": scan}
 
 
 @mcp.tool
@@ -318,8 +324,11 @@ async def write_copy_tool(
         "topic_tags": topic_tags or [],
         "source_url": source_url,
     }
-    copy = await write_copy(record, scan, mock=False)
-    return {"ok": True, "copy": copy}
+    async with buyer_job(record["buyer_id"]) as busy:
+        if busy:
+            return busy
+        copy = await write_copy(record, scan, mock=False)
+        return {"ok": True, "copy": copy}
 
 
 @mcp.tool
@@ -369,25 +378,28 @@ async def run_autopilot_tool(
     gate = blocked(record, need="run")
     if gate:
         return gate
-    try:
-        return await run_autopilot(
-            record,
-            niche=niche,
-            source_url=source_url,
-            mock=False,
-            draft=draft,
-        )
-    except MediaError as exc:
-        return {
-            "ok": False,
-            "step": "download",
-            "code": exc.code,
-            "say_to_user": str(exc),
-            "next": (
-                "Source fetch failed, not YouTube publishing. "
-                "Run again without source_url so we pick a TikTok or Short instead of a long YouTube talk."
-            ),
-        }
+    async with buyer_job(record["buyer_id"]) as busy:
+        if busy:
+            return busy
+        try:
+            return await run_autopilot(
+                record,
+                niche=niche,
+                source_url=source_url,
+                mock=False,
+                draft=draft,
+            )
+        except MediaError as exc:
+            return {
+                "ok": False,
+                "step": "download",
+                "code": exc.code,
+                "say_to_user": str(exc),
+                "next": (
+                    "Source fetch failed, not YouTube publishing. "
+                    "Run again without source_url so we pick a TikTok or Short instead of a long YouTube talk."
+                ),
+            }
 
 
 @mcp.tool
@@ -396,6 +408,7 @@ async def status() -> dict[str, Any]:
     record = current_record()
     payload = _onboard_payload(record)
     payload["last_run"] = record.get("last_run")
+    payload["busy"] = is_busy(record["buyer_id"])
     payload["defaults"]["platforms"] = list(record.get("platforms") or ONBOARD_PLATFORMS)
     return payload
 

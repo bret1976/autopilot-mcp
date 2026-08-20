@@ -3,7 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from app.config import DEFAULT_BRAND_VOICE, MAX_CLIP_SECONDS, ONBOARD_PLATFORMS
+from app.config import (
+    DEFAULT_BRAND_VOICE,
+    GEMINI_COPY_MODELS,
+    GEMINI_SCAN_MODELS,
+    MAX_CLIP_SECONDS,
+    ONBOARD_PLATFORMS,
+)
 from app.gemini import generate_json
 from app.hashtags import apply_hashtags, topic_tags
 from app.media import MediaError, download_and_cut
@@ -103,6 +109,7 @@ async def scan_trends(
             failed=failed,
         ),
         grounded=True,
+        models=GEMINI_SCAN_MODELS,
     )
 
 
@@ -136,6 +143,7 @@ async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = 
                 tags=", ".join(extras) or (record.get("brand_name") or "the brand"),
             ),
             grounded=False,
+            models=GEMINI_COPY_MODELS,
         )
     extras = topic_tags(raw.get("topic_tags") or extras)
     captions: dict[str, str] = {}
@@ -230,8 +238,23 @@ async def run_autopilot(
     url = ""
     for attempt in range(3):
         exclude = [item["url"] for item in skipped]
-        scan = await scan_trends(record, niche=niche, mock=mock, exclude_urls=exclude)
-        url = (pinned if attempt == 0 and pinned else "") or str(scan.get("source_url") or "")
+        if pinned and attempt == 0:
+            scan = {
+                "title": pinned,
+                "source_url": pinned,
+                "platform": "",
+                "why": "",
+                "topic_tags": [],
+                "suggested_start": 0,
+                "suggested_duration": MAX_CLIP_SECONDS,
+                "notes": "Pinned source_url — scan_trends skipped",
+                "scanned": False,
+            }
+            url = pinned
+        else:
+            scan = await scan_trends(record, niche=niche, mock=mock, exclude_urls=exclude)
+            url = str(scan.get("source_url") or "")
+            scan["scanned"] = True
         if not url:
             break
         if url in exclude:

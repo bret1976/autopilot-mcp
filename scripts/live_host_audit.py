@@ -108,7 +108,7 @@ def main() -> int:
             headers={"Accept": "application/json, text/event-stream", "Mcp-Session-Id": "stale"},
         )
         resp = conn.getresponse()
-        chunk = resp.read(40)
+        chunk = resp.read(13)
         sse_status, sse_ctype = resp.status, resp.getheader("Content-Type") or ""
     except Exception as exc:  # noqa: BLE001
         sse_status, sse_ctype, chunk = 0, "", str(exc).encode()
@@ -134,12 +134,13 @@ def main() -> int:
             "Access-Control-Request-Headers": "content-type,accept,mcp-protocol-version",
         },
     )
+    acao = headers.get("Access-Control-Allow-Origin") or headers.get("access-control-allow-origin")
     note(
         "OPTIONS CORS",
-        status == 200 and headers.get("Access-Control-Allow-Origin") == "*",
+        status == 200 and acao == "*",
         status,
         elapsed,
-        f"acao={headers.get('Access-Control-Allow-Origin')}",
+        f"acao={acao}",
     )
 
     for path in (

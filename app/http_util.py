@@ -91,19 +91,37 @@ def mcp_probe_payload() -> dict:
     }
 
 
-def _wants_sse(scope: Scope, request: Request) -> bool:
+def _original_accept(scope: Scope, request: Request) -> str:
     state = scope.get("state") or {}
-    if "mcp_wants_sse" in state:
-        return bool(state["mcp_wants_sse"])
-    return "text/event-stream" in (request.headers.get("accept") or "")
+    if "mcp_original_accept" in state:
+        return str(state["mcp_original_accept"] or "")
+    return request.headers.get("accept") or ""
+
+
+def _wants_sse(scope: Scope, request: Request) -> bool:
+    """Only hold GET open when the client is clearly an EventSource.
+
+    Grok/ChatGPT probe with Accept: application/json, text/event-stream and
+    wait for the GET to finish. A keep-alive stream makes them say the
+    connector is unavailable. EventSource sends text/event-stream only, or
+    reconnects with Last-Event-ID.
+    """
+    if request.headers.get("last-event-id"):
+        return True
+    accept = _original_accept(scope, request).lower()
+    if "text/event-stream" not in accept:
+        return False
+    if "application/json" in accept or "*/*" in accept:
+        return False
+    return True
 
 
 class McpGetProbeMiddleware:
     """Stateless FastMCP does not register GET. Other hosts still hit this URL.
 
-    Licensed GET/HEAD without text/event-stream → 200 JSON probe (Grok Build).
-    Licensed GET that asked for SSE → keep-alive event-stream (Claude/Codex/SDK).
-    JSON-RPC stays on POST. Never fall through to FastMCP 405.
+    Licensed GET/HEAD probe (JSON, */*, or both) → 200 JSON, body closed.
+    EventSource GET (text/event-stream only, or Last-Event-ID) → keep-alive SSE.
+    JSON-RPC stays on POST. Never fall through to FastMCP 405. Never hang a probe.
     """
 
     def __init__(self, app: ASGIApp) -> None:

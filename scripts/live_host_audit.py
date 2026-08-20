@@ -98,6 +98,20 @@ def main() -> int:
         f"ok={body.get('ok')} ctype={headers.get('Content-Type', '')[:40]}",
     )
 
+    status, headers, raw, elapsed = req(
+        "GET",
+        PATH,
+        headers={"Accept": "application/json, text/event-stream", "Origin": "https://grok.com"},
+    )
+    body = parse(raw)
+    note(
+        "GET probe both Accept (Grok)",
+        status == 200 and body.get("ok") is True and "application/json" in (headers.get("Content-Type") or headers.get("content-type") or ""),
+        status,
+        elapsed,
+        f"ok={body.get('ok')} ctype={headers.get('Content-Type') or headers.get('content-type')}",
+    )
+
     started = time.time()
     parsed = urlparse(PATH)
     conn = http.client.HTTPSConnection(parsed.hostname, parsed.port or 443, timeout=6)
@@ -105,7 +119,7 @@ def main() -> int:
         conn.request(
             "GET",
             parsed.path + (f"?{parsed.query}" if parsed.query else ""),
-            headers={"Accept": "application/json, text/event-stream", "Mcp-Session-Id": "stale"},
+            headers={"Accept": "text/event-stream"},
         )
         resp = conn.getresponse()
         chunk = resp.read(13)
@@ -115,7 +129,7 @@ def main() -> int:
     finally:
         conn.close()
     note(
-        "GET SSE + stale session",
+        "GET EventSource SSE-only",
         sse_status == 200 and "text/event-stream" in sse_ctype,
         sse_status,
         time.time() - started,

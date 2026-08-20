@@ -212,8 +212,25 @@ def test_bearer_and_query_and_path_are_same_license() -> None:
         assert {_json(path)["result"]["serverInfo"]["name"], _json(query)["result"]["serverInfo"]["name"], _json(bearer)["result"]["serverInfo"]["name"]} == {"TrendPilot"}
 
 
+def test_connector_probe_get_finishes_with_json() -> None:
+    """Grok/ChatGPT GET both Accept types and wait for EOF. Must not stream."""
+    token = mint_token("probe-host")
+    path = f"/mcp/t/{token}"
+    with TestClient(app) as client:
+        for accept in (
+            "*/*",
+            "application/json",
+            "application/json, text/event-stream",
+        ):
+            probe = client.get(path, headers={"Accept": accept, "Origin": "https://grok.com"})
+            assert probe.status_code == 200, accept
+            assert "application/json" in probe.headers.get("content-type", "")
+            assert probe.json()["mcp"] is True
+            assert probe.json()["server"]["name"] == "TrendPilot"
+
+
 @pytest.mark.asyncio
-async def test_official_sdk_get_is_sse_not_json() -> None:
+async def test_eventsource_get_is_sse() -> None:
     token = mint_token("sse-host")
     path = f"/mcp/t/{token}"
     scope = {
@@ -225,7 +242,7 @@ async def test_official_sdk_get_is_sse_not_json() -> None:
         "path": path,
         "raw_path": path.encode(),
         "query_string": b"",
-        "headers": [(b"accept", b"application/json, text/event-stream"), (b"host", b"test")],
+        "headers": [(b"accept", b"text/event-stream"), (b"host", b"test")],
         "client": ("testclient", 50000),
         "server": ("test", 80),
     }
@@ -245,8 +262,3 @@ async def test_official_sdk_get_is_sse_not_json() -> None:
     assert "text/event-stream" in headers["content-type"]
     body = b"".join(item.get("body") or b"" for item in messages if item["type"] == "http.response.body")
     assert body.startswith(b":")
-
-    with TestClient(app) as client:
-        probe = client.get(path, headers={"Accept": "*/*"})
-        assert probe.status_code == 200
-        assert probe.json()["mcp"] is True

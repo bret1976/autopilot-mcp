@@ -30,6 +30,8 @@ from app.config import (
 from app.http_util import (
     AcceptCompatMiddleware,
     HttpsLocationMiddleware,
+    InitializedCompatMiddleware,
+    JsonContentTypeMiddleware,
     McpGetProbeMiddleware,
     NormalizeMcpPathMiddleware,
     TokenPathMiddleware,
@@ -82,7 +84,9 @@ app.mount("/assets", StaticFiles(directory=str(PUBLIC_DIR)), name="assets")
 app.mount("/mcp", mcp_app)
 app.add_middleware(HttpsLocationMiddleware)
 app.add_middleware(McpGetProbeMiddleware)
+app.add_middleware(InitializedCompatMiddleware)
 app.add_middleware(AcceptCompatMiddleware)
+app.add_middleware(JsonContentTypeMiddleware)
 app.add_middleware(NormalizeMcpPathMiddleware)
 app.add_middleware(TokenPathMiddleware)
 app.add_middleware(WellKnownRewriteMiddleware)
@@ -133,6 +137,7 @@ async def health():
         "price": PRICE_USD,
         "data_dir": str(root),
         "data_dir_writable": writable,
+        "persist": writable,
     }
 
 

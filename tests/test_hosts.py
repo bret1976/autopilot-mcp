@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 
 os.environ.setdefault("MCP_ISSUER_SECRET", "test-issuer-secret")
 os.environ.setdefault("DATA_DIR", "/tmp/autopilot-mcp-host-tests")
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -122,3 +124,129 @@ def test_host_handshakes_and_fast_tools() -> None:
         assert status.status_code == 200
         body = _json(status)["result"]["structuredContent"]
         assert body["busy"] is False
+        content = _json(status)["result"].get("content") or []
+        assert content and content[0].get("text")
+
+
+def test_initialized_with_id_is_not_32602() -> None:
+    token = mint_token("init-id")
+    with TestClient(app) as client:
+        res = client.post(
+            f"/mcp/t/{token}",
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            json={"jsonrpc": "2.0", "id": 99, "method": "notifications/initialized"},
+        )
+        assert res.status_code == 200
+        payload = _json(res)
+        assert payload.get("id") == 99
+        assert "error" not in payload
+        assert payload.get("result") == {}
+
+
+def test_missing_content_type_still_initializes() -> None:
+    token = mint_token("no-ctype")
+    with TestClient(app) as client:
+        res = client.post(
+            f"/mcp/t/{token}",
+            headers={"Accept": "application/json"},
+            content=json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "plain", "version": "0"},
+                    },
+                }
+            ),
+        )
+        assert res.status_code == 200
+        assert _json(res)["result"]["serverInfo"]["name"] == "TrendPilot"
+
+
+def test_get_with_stale_session_is_not_405() -> None:
+    token = mint_token("stale-session")
+    with TestClient(app) as client:
+        res = client.get(
+            f"/mcp/t/{token}",
+            headers={"Accept": "*/*", "Mcp-Session-Id": "deadbeef"},
+        )
+        assert res.status_code == 200
+        assert res.json()["mcp"] is True
+
+
+def test_bearer_and_query_and_path_are_same_license() -> None:
+    token = mint_token("three-ways")
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "three", "version": "0"},
+        },
+    }
+    with TestClient(app) as client:
+        path = client.post(
+            f"/mcp/t/{token}",
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            json=init,
+        )
+        query = client.post(
+            f"/mcp?token={token}",
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            json=init,
+        )
+        bearer = client.post(
+            "/mcp",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            json=init,
+        )
+        assert {_json(path)["result"]["serverInfo"]["name"], _json(query)["result"]["serverInfo"]["name"], _json(bearer)["result"]["serverInfo"]["name"]} == {"TrendPilot"}
+
+
+@pytest.mark.asyncio
+async def test_official_sdk_get_is_sse_not_json() -> None:
+    token = mint_token("sse-host")
+    path = f"/mcp/t/{token}"
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [(b"accept", b"application/json, text/event-stream"), (b"host", b"test")],
+        "client": ("testclient", 50000),
+        "server": ("test", 80),
+    }
+    messages: list[dict] = []
+
+    async def receive():
+        await asyncio.sleep(0.05)
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        messages.append(message)
+
+    await asyncio.wait_for(app(scope, receive, send), timeout=2)
+    start = next(item for item in messages if item["type"] == "http.response.start")
+    headers = {key.decode(): value.decode() for key, value in start["headers"]}
+    assert start["status"] == 200
+    assert "text/event-stream" in headers["content-type"]
+    body = b"".join(item.get("body") or b"" for item in messages if item["type"] == "http.response.body")
+    assert body.startswith(b":")
+
+    with TestClient(app) as client:
+        probe = client.get(path, headers={"Accept": "*/*"})
+        assert probe.status_code == 200
+        assert probe.json()["mcp"] is True

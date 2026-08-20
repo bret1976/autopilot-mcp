@@ -104,7 +104,7 @@ MCP_ISSUER_SECRET=… PUBLIC_BASE_URL=https://your-host \
   python -m app.mint --email buyer@studio.com --buyer-id north-light
 ```
 
-Or open `/admin`, enter `ADMIN_SECRET`, set buyer + days valid, Generate link. `/buy` already mints and displays the URL. Unauthenticated `/mcp` and `/mcp/` return `401 Missing license key` over HTTPS with no redirect to `http://`. JSON-only `Accept` headers (Grok) get JSON, not a 406.
+Or open `/admin`, enter `ADMIN_SECRET`, set buyer + days valid, Generate link. `/buy` already mints and displays the URL. Unauthenticated `/mcp` and `/mcp/` return `401 Missing license key` over HTTPS with no redirect to `http://`. JSON-only `Accept` headers (Grok) get JSON, not a 406. A GET that asks for `text/event-stream` gets a keep-alive SSE stream (Claude/Codex/SDK). Hosts that send `notifications/initialized` with an `id` get an empty result instead of `-32602`. Long tools (`scan_trends`, `download_original`, `write_copy`, `publish`, `run_autopilot`) return immediately with `started=true` — the host must poll `status` until `job.status` is `ok` or `error`.
 
 ## Run locally
 

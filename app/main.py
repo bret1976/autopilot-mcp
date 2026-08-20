@@ -29,6 +29,7 @@ from app.config import (
 from app.http_util import (
     AcceptCompatMiddleware,
     HttpsLocationMiddleware,
+    McpGetProbeMiddleware,
     NormalizeMcpPathMiddleware,
     TokenPathMiddleware,
     WellKnownRewriteMiddleware,
@@ -79,6 +80,7 @@ app.include_router(oauth_router)
 app.mount("/assets", StaticFiles(directory=str(PUBLIC_DIR)), name="assets")
 app.mount("/mcp", mcp_app)
 app.add_middleware(HttpsLocationMiddleware)
+app.add_middleware(McpGetProbeMiddleware)
 app.add_middleware(AcceptCompatMiddleware)
 app.add_middleware(NormalizeMcpPathMiddleware)
 app.add_middleware(TokenPathMiddleware)

@@ -187,6 +187,27 @@ def test_oauth_license_exchange() -> None:
         assert live.json()["result"]["capabilities"] is not None
 
 
+def test_get_probe_is_200_not_405() -> None:
+    token = mint_token("grok-build")
+    with TestClient(app) as client:
+        dead = client.get("/mcp", headers={"Origin": "https://grok.com"})
+        assert dead.status_code == 401
+        assert dead.json()["error"] == "Missing license key"
+        live = client.get(
+            f"/mcp/t/{token}",
+            headers={"Accept": "*/*", "Origin": "https://grok.com"},
+        )
+        assert live.status_code == 200
+        body = live.json()
+        assert body["ok"] is True
+        assert body["mcp"] is True
+        assert body["transport"] == "streamable-http"
+        assert body["server"]["name"] == "TrendPilot"
+        assert body["first_tool"] == "onboard"
+        head = client.head(f"/mcp/t/{token}")
+        assert head.status_code == 200
+
+
 def test_cors_preflight_from_grok() -> None:
     with TestClient(app) as client:
         res = client.options(

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import unquote
 
 from starlette.datastructures import MutableHeaders
+from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _TOKEN_PATH = re.compile(r"^/mcp/t/([^/]+)/?$")
@@ -68,6 +70,83 @@ class NormalizeMcpPathMiddleware:
             if "raw_path" in scope:
                 scope["raw_path"] = b"/mcp/"
         await self.app(scope, receive, send)
+
+
+def mcp_probe_payload() -> dict:
+    from app.config import PRODUCT_NAME, PRICE_USD
+
+    return {
+        "ok": True,
+        "mcp": True,
+        "jsonrpc": "2.0",
+        "transport": "streamable-http",
+        "protocol": "2024-11-05",
+        "product": PRODUCT_NAME,
+        "price": PRICE_USD,
+        "server": {"name": "TrendPilot", "title": PRODUCT_NAME},
+        "allow": ["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
+        "hint": "This URL is a Streamable HTTP MCP server. POST JSON-RPC initialize here. GET is only a connector probe.",
+        "first_tool": "onboard",
+    }
+
+
+class McpGetProbeMiddleware:
+    """Grok Build GETs the MCP URL first. Stateless FastMCP answers that with 405.
+
+    A licensed GET/HEAD returns 200 discovery so the host does not treat the
+    connector as dead. Real JSON-RPC stays on POST.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        method = scope.get("method") or ""
+        path = scope.get("path") or ""
+        if method not in {"GET", "HEAD"} or not path.startswith("/mcp"):
+            await self.app(scope, receive, send)
+            return
+        if "well-known" in path or path.startswith("/mcp/media"):
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope, receive)
+        if request.headers.get("mcp-session-id"):
+            await self.app(scope, receive, send)
+            return
+
+        from app.oauth import www_authenticate
+        from app.tokens import extract_token, verify_token
+
+        parsed = verify_token(extract_token(request))
+        headers = [
+            (b"allow", b"GET, HEAD, POST, DELETE, OPTIONS"),
+            (b"cache-control", b"no-store"),
+        ]
+        if not parsed:
+            body = json.dumps({"error": "Missing license key"}).encode()
+            headers.extend(
+                [
+                    (b"content-type", b"application/json"),
+                    (b"www-authenticate", www_authenticate(request).encode("latin-1")),
+                    (b"content-length", str(len(body)).encode()),
+                ]
+            )
+            await send({"type": "http.response.start", "status": 401, "headers": headers})
+            await send({"type": "http.response.body", "body": b"" if method == "HEAD" else body})
+            return
+
+        body = json.dumps(mcp_probe_payload()).encode()
+        headers.extend(
+            [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode()),
+            ]
+        )
+        await send({"type": "http.response.start", "status": 200, "headers": headers})
+        await send({"type": "http.response.body", "body": b"" if method == "HEAD" else body})
 
 
 class AcceptCompatMiddleware:

@@ -119,9 +119,11 @@ def test_well_known_oauth_discovery() -> None:
         under_token = client.get(f"/mcp/t/{token}/.well-known/oauth-protected-resource")
         assert under_token.status_code == 200
         assert under_token.json()["resource"].endswith(f"/mcp/t/{token}")
+        assert "authorization_servers" not in under_token.json()
         rfc9728 = client.get(f"/.well-known/oauth-protected-resource/mcp/t/{token}")
         assert rfc9728.status_code == 200
         assert rfc9728.json()["resource"].endswith(f"/mcp/t/{token}")
+        assert "authorization_servers" not in rfc9728.json()
         authz_suffix = client.get(f"/.well-known/oauth-authorization-server/mcp/t/{token}")
         assert authz_suffix.status_code == 200
         assert authz_suffix.json()["authorization_endpoint"].endswith("/oauth/authorize")

@@ -84,13 +84,17 @@ def protected_resource_metadata(request: Request) -> dict[str, Any]:
     parsed = verify_token(token) if token else None
     default = f"{base}/mcp/t/{parsed.raw}" if parsed else f"{base}/mcp"
     resource = request.query_params.get("resource") or default
-    return {
+    payload = {
         "resource": resource,
-        "authorization_servers": [base],
         "bearer_methods_supported": ["header", "query"],
         "scopes_supported": SCOPES,
         "resource_documentation": f"{base}/",
     }
+    # Path-token URLs already carry the license. Advertising an authorization
+    # server makes Grok start OAuth, fail the paste form, and show Connection failed.
+    if not parsed:
+        payload["authorization_servers"] = [base]
+    return payload
 
 
 def authorization_server_metadata(request: Request) -> dict[str, Any]:

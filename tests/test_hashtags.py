@@ -25,6 +25,15 @@ def test_twitter_one_or_two_and_under_280() -> None:
     assert out.endswith(tuple(tags)) or any(tag in out for tag in tags)
 
 
+def test_gbp_has_a_cap_and_does_not_raise() -> None:
+    tags = hashtags_for("GBP", ["Kling", "NightDrive", "TooMany", "Extra"])
+    assert len(tags) <= 3
+    out = apply_hashtags("google_business", "Sunday hours are up.", ["Kling"])
+    assert "Sunday hours" in out
+    unknown = hashtags_for("threads", ["One"])
+    assert len(unknown) <= 3
+
+
 def test_youtube_hashtags_applied_to_caption() -> None:
     out = apply_hashtags("youtube", "Cut from the viral original.", ["Kling"])
     assert "#6FrameStudio" in out

@@ -44,11 +44,16 @@ def hashtags_for(
     key = platform.strip().lower()
     if key == "x":
         key = "twitter"
-    if key not in HASHTAG_CAPS:
-        raise ValueError(f"No hashtag cap for platform: {platform}")
-    lo, hi = HASHTAG_CAPS[key]
+    if key in {"gbp", "gmb", "google_business_profile"}:
+        key = "google_business"
+    lo, hi = HASHTAG_CAPS.get(key, (0, 3))
     extras = topic_tags(extra)
     locked_tags = list(LOCKED_HASHTAGS if locked is None else locked)
+
+    if key == "google_business":
+        # GBP local posts look like a shop update, not a hashtag dump.
+        chosen = topic_tags(list(locked or []) + extras)
+        return chosen[:hi]
 
     if key == "twitter":
         # X: 1–2 tags, last tweet stays under 280. Prefer studio mark, then a topic.
@@ -85,6 +90,10 @@ def apply_hashtags(
     tag_line = " ".join(tags)
     text = (body or "").rstrip()
     key = platform.strip().lower()
+    if key in {"gbp", "gmb", "google_business_profile"}:
+        key = "google_business"
+    if not tags:
+        return text
     if key in {"twitter", "x"}:
         candidate = f"{text} {tag_line}".strip() if text else tag_line
         if len(candidate) <= twitter_limit:

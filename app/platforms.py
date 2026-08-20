@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.config import LANDSCAPE_PLATFORMS, VERTICAL_PLATFORMS
+from app.config import IMAGE_PLATFORMS, LANDSCAPE_PLATFORMS, VERTICAL_PLATFORMS
 
 ALIASES = {
     "ig": "instagram",
@@ -14,6 +14,11 @@ ALIASES = {
     "twitter/x": "twitter",
     "twitter": "twitter",
     "li": "linkedin",
+    "gbp": "google_business",
+    "gmb": "google_business",
+    "google business": "google_business",
+    "google_business_profile": "google_business",
+    "google business profile": "google_business",
 }
 
 
@@ -39,12 +44,15 @@ def aspect_for(platform: str) -> str:
         return "16:9"
     if name in VERTICAL_PLATFORMS:
         return "9:16"
+    if name in IMAGE_PLATFORMS:
+        return "image"
     raise ValueError(f"Unknown platform: {platform}")
 
 
 def split_batches(platforms: list[str]) -> dict[str, list[str]]:
     vertical: list[str] = []
     landscape: list[str] = []
+    image: list[str] = []
     unknown: list[str] = []
     for raw in platforms:
         name = normalize_platform(raw)
@@ -52,9 +60,16 @@ def split_batches(platforms: list[str]) -> dict[str, list[str]]:
             vertical.append(name)
         elif name in LANDSCAPE_PLATFORMS:
             landscape.append(name)
+        elif name in IMAGE_PLATFORMS:
+            image.append(name)
         else:
             unknown.append(name)
-    return {"vertical_9x16": vertical, "landscape_16x9": landscape, "unknown": unknown}
+    return {
+        "vertical_9x16": vertical,
+        "landscape_16x9": landscape,
+        "image_still": image,
+        "unknown": unknown,
+    }
 
 
 def youtube_title(title: str) -> str:

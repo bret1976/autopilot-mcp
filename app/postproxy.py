@@ -41,6 +41,53 @@ async def _request(
     return response.json()
 
 
+def as_rows(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        for key in ("data", "profiles", "placements", "items"):
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def placement_id(row: dict[str, Any]) -> str:
+    for key in ("id", "page_id", "location_id", "resource_name", "resourceName"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def pick_placement(
+    payload: Any,
+    *,
+    pinned_id: str = "",
+    prefer_name: str = "",
+) -> dict[str, Any] | None:
+    rows = as_rows(payload)
+    if not rows:
+        return None
+    pinned = (pinned_id or "").strip()
+    if pinned:
+        for row in rows:
+            if placement_id(row) == pinned or str(row.get("name") or "") == pinned:
+                return row
+    needle = (prefer_name or "").strip().lower()
+    if needle:
+        for row in rows:
+            name = str(row.get("name") or "").lower()
+            if needle in name or name in needle:
+                return row
+    return rows[0]
+
+
+def is_forbidden(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(token in text for token in ("403", "forbidden", "unauthorized", "reconnect"))
+
+
 async def list_profiles(api_key: str, profile_group_id: str = "") -> Any:
     params = {"profile_group_id": profile_group_id} if profile_group_id else None
     return await _request("GET", "/api/profiles", api_key, params=params)
@@ -48,6 +95,21 @@ async def list_profiles(api_key: str, profile_group_id: str = "") -> Any:
 
 async def list_profile_groups(api_key: str) -> Any:
     return await _request("GET", "/api/profile_groups", api_key)
+
+
+async def list_placements(api_key: str, profile_id: str) -> Any:
+    return await _request("GET", f"/api/profiles/{profile_id}/placements", api_key)
+
+
+def index_profiles(payload: Any) -> dict[str, dict[str, Any]]:
+    from app.platforms import normalize_platform
+
+    out: dict[str, dict[str, Any]] = {}
+    for row in as_rows(payload):
+        platform = normalize_platform(str(row.get("platform") or row.get("network") or ""))
+        if platform:
+            out[platform] = row
+    return out
 
 
 async def initialize_connection(

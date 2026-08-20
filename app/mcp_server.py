@@ -122,10 +122,13 @@ async def setup(
     daily_run_hour: int | None = None,
     daily_run_timezone: str | None = None,
     public_base_url: str | None = None,
+    facebook_page_id: str | None = None,
+    google_location_id: str | None = None,
 ) -> dict[str, Any]:
     """Save the buyer's own keys and brand. Secrets are never echoed back.
 
     If website_url is set, TrendPilot pulls brand voice from that site.
+    facebook_page_id and google_location_id pin PostProxy placements.
     """
     record = current_record()
     fields: dict[str, Any] = {
@@ -140,6 +143,8 @@ async def setup(
         "daily_run_hour": daily_run_hour,
         "daily_run_timezone": daily_run_timezone,
         "public_base_url": public_base_url,
+        "facebook_page_id": facebook_page_id,
+        "google_location_id": google_location_id,
     }
     saved = update_setup(record["buyer_id"], fields)
     if website_url and not brand_voice:
@@ -182,6 +187,8 @@ async def configure(
     daily_run_hour: int | None = None,
     daily_run_timezone: str | None = None,
     public_base_url: str | None = None,
+    facebook_page_id: str | None = None,
+    google_location_id: str | None = None,
 ) -> dict[str, Any]:
     """Alias of setup."""
     return await setup(
@@ -196,6 +203,8 @@ async def configure(
         daily_run_hour=daily_run_hour,
         daily_run_timezone=daily_run_timezone,
         public_base_url=public_base_url,
+        facebook_page_id=facebook_page_id,
+        google_location_id=google_location_id,
     )
 
 

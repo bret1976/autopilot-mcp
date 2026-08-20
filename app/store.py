@@ -62,6 +62,8 @@ def ensure_buyer(
         "gemini_api_key": "",
         "postproxy_api_key": "",
         "postproxy_profile_group_id": "",
+        "facebook_page_id": "",
+        "google_location_id": "",
         "brand_name": "",
         "website_url": "",
         "brand_voice": "",
@@ -119,6 +121,8 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
             "public_base_url",
             "email",
             "note",
+            "facebook_page_id",
+            "google_location_id",
         }:
             record[key] = str(value).strip()
     return save_buyer(record)
@@ -146,6 +150,8 @@ def public_config(record: dict[str, Any]) -> dict[str, Any]:
         "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
         "public_base_url": record.get("public_base_url") or None,
         "postproxy_profile_group_id": record.get("postproxy_profile_group_id") or None,
+        "facebook_page_id": record.get("facebook_page_id") or None,
+        "google_location_id": record.get("google_location_id") or None,
         "gemini_key": _mask(record.get("gemini_api_key")),
         "postproxy_key": _mask(record.get("postproxy_api_key")),
         "configured": report["ready"],

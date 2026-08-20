@@ -10,13 +10,14 @@ from app.config import (
     GEMINI_SCAN_MODELS,
     MAX_CLIP_SECONDS,
     ONBOARD_PLATFORMS,
+    public_base_url,
 )
 from app.gemini import generate_json
 from app.hashtags import apply_hashtags, topic_tags
 from app.media import MediaError, download_and_cut
-from app.platforms import split_batches, youtube_title
+from app.platforms import normalize_platform, split_batches, youtube_title
 from app import postproxy
-from app.store import public_config, set_last_run
+from app.store import public_config, set_last_run, update_setup
 
 SCAN_PROMPT = """You are scanning live public web results for one ORIGINAL clip this brand can cut today.
 The downloader runs on a datacenter IP. Long YouTube talks (TEDx, podcasts, news) get bot-walled.
@@ -67,7 +68,8 @@ Return JSON only:
     "youtube": "...",
     "facebook": "...",
     "linkedin": "...",
-    "twitter": "short body, room for 1-2 tags under 280"
+    "twitter": "short body, room for 1-2 tags under 280",
+    "google_business": "short local update, no hashtag dump, under 1500 characters"
   }}
 }}
 """
@@ -148,9 +150,11 @@ async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = 
         )
     extras = topic_tags(raw.get("topic_tags") or extras)
     captions: dict[str, str] = {}
+    raw_captions = raw.get("captions") or {}
     for platform in platforms:
-        body = (raw.get("captions") or {}).get(platform) or raw.get("title") or ""
-        captions[platform] = apply_hashtags(platform, body, extras, locked=locked)
+        name = normalize_platform(str(platform))
+        body = raw_captions.get(name) or raw_captions.get(platform) or raw.get("title") or ""
+        captions[name] = apply_hashtags(name, body, extras, locked=locked)
     return {
         "title": raw.get("title") or scan.get("title") or "Studio cut",
         "youtube_title": youtube_title(raw.get("title") or scan.get("title") or "Studio cut"),
@@ -191,37 +195,185 @@ async def publish_cut(
     posts = []
     key = record.get("postproxy_api_key") or ""
     group = record.get("postproxy_profile_group_id") or ""
+    try:
+        indexed = postproxy.index_profiles(await postproxy.list_profiles(key, group))
+    except postproxy.PostProxyError:
+        indexed = {}
+
     for aspect, names, url in (
         ("9:16", batches["vertical_9x16"], media.get("vertical_url")),
         ("16:9", batches["landscape_16x9"], media.get("landscape_url")),
+        ("image", batches.get("image_still") or [], media.get("poster_url") or media.get("landscape_url")),
     ):
         if not names:
             continue
-        # One PostProxy call per platform so captions and YouTube title stay correct.
         for name in names:
-            platform_params: dict[str, Any] = {}
-            if name == "youtube":
-                platform_params["youtube"] = {
-                    "title": copy["youtube_title"],
-                    "privacy_status": "public",
-                }
-            if name == "instagram":
-                platform_params["instagram"] = {"format": "reel"}
-            if name == "facebook":
-                platform_params["facebook"] = {"format": "reel"}
-            if name == "tiktok":
-                platform_params["tiktok"] = {"format": "video"}
-            result = await postproxy.create_post(
-                key,
-                body=copy["captions"].get(name, ""),
-                profiles=[name],
-                media=[url] if url else [],
-                platforms=platform_params or None,
-                profile_group_id=group,
-                draft=draft,
+            name = normalize_platform(name)
+            posts.append(
+                await _publish_one(
+                    record,
+                    copy,
+                    name,
+                    aspect,
+                    url or "",
+                    indexed=indexed,
+                    draft=draft,
+                )
             )
-            posts.append({"aspect": aspect, "platform": name, "result": result})
     return {"mocked": False, "batches": batches, "posts": posts}
+
+
+async def _publish_one(
+    record: dict[str, Any],
+    copy: dict[str, Any],
+    name: str,
+    aspect: str,
+    url: str,
+    *,
+    indexed: dict[str, dict[str, Any]],
+    draft: bool,
+) -> dict[str, Any]:
+    key = record.get("postproxy_api_key") or ""
+    group = record.get("postproxy_profile_group_id") or ""
+    profile = indexed.get(name) or {}
+    profile_ref = str(profile.get("id") or name)
+    account = str(profile.get("name") or name)
+    params, placement, pin_field = await _platform_params(record, copy, name, profile, key)
+    media_urls = [url] if url else []
+    if name == "google_business":
+        media_urls = [url] if url else []
+    body = copy["captions"].get(name) or copy.get("title") or ""
+
+    async def send(media_list: list[str]) -> Any:
+        return await postproxy.create_post(
+            key,
+            body=body,
+            profiles=[profile_ref],
+            media=media_list,
+            platforms={name: params} if params else None,
+            profile_group_id=group,
+            draft=draft,
+        )
+
+    try:
+        result = await send(media_urls)
+    except postproxy.PostProxyError as exc:
+        if name == "twitter" and media_urls and postproxy.is_forbidden(exc):
+            try:
+                result = await send([])
+                return {
+                    "ok": True,
+                    "aspect": aspect,
+                    "platform": name,
+                    "account": account,
+                    "placement": placement,
+                    "retried": "text_only",
+                    "result": result,
+                    "say_to_user": (
+                        f"X rejected the video on {account}, so we posted the caption without the clip."
+                    ),
+                }
+            except postproxy.PostProxyError as retry_exc:
+                exc = retry_exc
+        reconnect = None
+        if postproxy.is_forbidden(exc) or name == "twitter":
+            try:
+                reconnect = await postproxy.initialize_connection(
+                    key,
+                    group,
+                    "twitter" if name == "twitter" else name,
+                    f"{record.get('public_base_url') or public_base_url()}/connected",
+                )
+            except postproxy.PostProxyError:
+                reconnect = None
+        return {
+            "ok": False,
+            "aspect": aspect,
+            "platform": name,
+            "account": account,
+            "placement": placement,
+            "error": str(exc),
+            "open_this_url": (reconnect or {}).get("url") if isinstance(reconnect, dict) else None,
+            "say_to_user": (
+                f"{account} on {name} needs a reconnect in PostProxy. "
+                "Open the URL and finish OAuth on that profile, then run again."
+                if postproxy.is_forbidden(exc)
+                else str(exc)
+            ),
+        }
+
+    if pin_field and placement:
+        update_setup(record["buyer_id"], {pin_field: placement})
+        record[pin_field] = placement
+    return {
+        "ok": True,
+        "aspect": aspect,
+        "platform": name,
+        "account": account,
+        "placement": placement,
+        "result": result,
+    }
+
+
+async def _platform_params(
+    record: dict[str, Any],
+    copy: dict[str, Any],
+    name: str,
+    profile: dict[str, Any],
+    api_key: str,
+) -> tuple[dict[str, Any], str | None, str | None]:
+    if name == "youtube":
+        return {"title": copy["youtube_title"], "privacy_status": "public"}, None, None
+    if name == "instagram":
+        return {"format": "reel"}, None, None
+    if name == "tiktok":
+        return {"format": "video"}, None, None
+    if name == "facebook":
+        picked = await _resolve_placement(
+            api_key,
+            profile,
+            pinned=str(record.get("facebook_page_id") or ""),
+            prefer_name=str(profile.get("name") or ""),
+        )
+        page_id = postproxy.placement_id(picked) if picked else ""
+        params: dict[str, Any] = {"format": "reel"}
+        if page_id:
+            params["page_id"] = page_id
+        return params, page_id or None, "facebook_page_id"
+    if name == "google_business":
+        picked = await _resolve_placement(
+            api_key,
+            profile,
+            pinned=str(record.get("google_location_id") or ""),
+            prefer_name=str(record.get("brand_name") or profile.get("name") or ""),
+        )
+        location_id = postproxy.placement_id(picked) if picked else ""
+        params = {"format": "standard"}
+        if location_id:
+            params["location_id"] = location_id
+        website = str(record.get("website_url") or "").strip()
+        if website:
+            params["cta_action_type"] = "LEARN_MORE"
+            params["cta_url"] = website
+        return params, location_id or None, "google_location_id"
+    return {}, None, None
+
+
+async def _resolve_placement(
+    api_key: str,
+    profile: dict[str, Any],
+    *,
+    pinned: str,
+    prefer_name: str,
+) -> dict[str, Any] | None:
+    profile_id = str(profile.get("id") or "")
+    if not profile_id:
+        return {"id": pinned} if pinned else None
+    try:
+        payload = await postproxy.list_placements(api_key, profile_id)
+    except postproxy.PostProxyError:
+        return {"id": pinned} if pinned else None
+    return postproxy.pick_placement(payload, pinned_id=pinned, prefer_name=prefer_name)
 
 
 async def run_autopilot(

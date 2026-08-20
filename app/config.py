@@ -39,6 +39,7 @@ DEFAULT_DAILY_TIMEZONE = "America/Los_Angeles"
 
 VERTICAL_PLATFORMS = frozenset({"instagram", "tiktok", "youtube", "facebook"})
 LANDSCAPE_PLATFORMS = frozenset({"linkedin", "twitter", "x"})
+IMAGE_PLATFORMS = frozenset({"google_business"})
 
 HASHTAG_CAPS: dict[str, tuple[int, int]] = {
     "linkedin": (5, 8),
@@ -48,6 +49,9 @@ HASHTAG_CAPS: dict[str, tuple[int, int]] = {
     "youtube": (8, 12),
     "twitter": (1, 2),
     "x": (1, 2),
+    "google_business": (0, 3),
+    "gbp": (0, 3),
+    "gmb": (0, 3),
 }
 
 DEFAULT_BRAND_VOICE = (

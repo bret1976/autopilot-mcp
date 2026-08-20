@@ -153,11 +153,12 @@ def download_and_cut(
     raw_template = dest / f"{stem}-raw.%(ext)s"
     vertical = dest / f"{stem}-9x16.mp4"
     landscape = dest / f"{stem}-16x9.mp4"
+    poster = dest / f"{stem}-poster.jpg"
     meta_path = dest / f"{stem}.json"
 
     if mock:
         raw = dest / f"{stem}-raw.mp4"
-        for path in (raw, vertical, landscape):
+        for path in (raw, vertical, landscape, poster):
             path.write_bytes(b"MOCK")
         record = {
             "source_url": source_url,
@@ -166,6 +167,7 @@ def download_and_cut(
             "raw": raw.name,
             "vertical": vertical.name,
             "landscape": landscape.name,
+            "poster": poster.name,
         }
         meta_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
         return _public_record(buyer_id, record)
@@ -205,6 +207,7 @@ def download_and_cut(
 
     _transcode(ffmpeg, raw, vertical, "1080:1920", start, duration)
     _transcode(ffmpeg, raw, landscape, "1920:1080", start, duration)
+    _poster_frame(ffmpeg, landscape, poster)
     record = {
         "source_url": source_url,
         "mock": False,
@@ -213,6 +216,7 @@ def download_and_cut(
         "raw": raw.name,
         "vertical": vertical.name,
         "landscape": landscape.name,
+        "poster": poster.name,
     }
     meta_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     return _public_record(buyer_id, record)
@@ -255,6 +259,25 @@ def _transcode(
         raise MediaError(result.stderr[-500:] or f"ffmpeg failed for {dest.name}", code="transcode_failed")
 
 
+def _poster_frame(ffmpeg: str, source: Path, dest: Path) -> None:
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-ss",
+        "1",
+        "-i",
+        str(source),
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=1200:900:force_original_aspect_ratio=increase,crop=1200:900,setsar=1",
+        str(dest),
+    ]
+    result = _run(cmd)
+    if result.returncode != 0 or not dest.exists():
+        raise MediaError(result.stderr[-500:] or f"ffmpeg failed for {dest.name}", code="transcode_failed")
+
+
 def _public_record(buyer_id: str, record: dict[str, Any]) -> dict[str, Any]:
     base = None
     stored = None
@@ -266,8 +289,11 @@ def _public_record(buyer_id: str, record: dict[str, Any]) -> dict[str, Any]:
             base = stored.get("public_base_url") or None
     except Exception:  # noqa: BLE001
         base = None
-    return {
+    urls = {
         **record,
         "vertical_url": media_url(buyer_id, record["vertical"], base),
         "landscape_url": media_url(buyer_id, record["landscape"], base),
     }
+    if record.get("poster"):
+        urls["poster_url"] = media_url(buyer_id, record["poster"], base)
+    return urls

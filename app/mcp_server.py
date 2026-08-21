@@ -14,7 +14,7 @@ from app.jobs import is_busy, load_job, spawn_job
 from app.media import MediaError, download_and_cut
 from app.onboard import blocked, fetch_brand_from_website, readiness
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
-from app.store import ensure_buyer, load_buyer, public_config, save_buyer, update_setup
+from app.store import apply_owner_studio_brand, ensure_buyer, load_buyer, public_config, save_buyer, update_setup
 from app.tokens import extract_token, verify_token
 
 buyer_id_var: ContextVar[str | None] = ContextVar("buyer_id", default=None)
@@ -33,7 +33,11 @@ mcp = FastMCP(
         "until onboard.ready is true. "
         "Never invent API keys. Never use a shared Gemini or PostProxy key. "
         "Never enable mock mode. Never dump 6Frame stub clips. "
-        "Brand comes from THEIR name + website (example: IAN Group / iangroup.ai). "
+        "Initial brand is 6Frame Studio. Do not change it on connect. "
+        "The user pastes their own Gemini and PostProxy keys in the host (Grok Build). "
+        "Those are the 6Frame keys; posts go to the user's socials. "
+        "Only change brand_name/website when the user names a company to beta-test. "
+        "Then scan and write as THAT company. Do not invent another brand. "
         "Default platforms: LinkedIn, X, Instagram, YouTube, Facebook. "
         "The paste-a-URL license does not change. After keys are wired, offer set_automation. "
         "Daily automation is off until they enable it. They choose require_approval=true "
@@ -78,7 +82,7 @@ def current_buyer_id() -> str:
 
 def current_record() -> dict[str, Any]:
     buyer_id = current_buyer_id()
-    return load_buyer(buyer_id) or ensure_buyer(buyer_id)
+    return apply_owner_studio_brand(load_buyer(buyer_id) or ensure_buyer(buyer_id))
 
 
 def buyer_from_request(request: Request) -> str | None:

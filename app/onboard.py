@@ -10,6 +10,8 @@ from app.config import (
     DEFAULT_DAILY_HOUR,
     DEFAULT_DAILY_TIMEZONE,
     ONBOARD_PLATFORMS,
+    STUDIO_NAME,
+    STUDIO_WEBSITE,
 )
 from app.hashtags import normalize_tag
 
@@ -66,8 +68,11 @@ def missing_fields(record: dict[str, Any]) -> list[dict[str, str]]:
         missing.append(
             {
                 "id": "website_url",
-                "prompt": "What is the brand, and what is the website? Example: IAN Group — https://iangroup.ai",
-                "why": "Copy is written in THEIR voice from the site. We do not default to 6Frame.",
+                "prompt": (
+                    f"Initial brand is {STUDIO_NAME} ({STUDIO_WEBSITE}). "
+                    "Leave it. Only name a different company if you are beta-testing that brand."
+                ),
+                "why": "The connector starts as 6Frame Studio. Do not replace it on connect.",
             }
         )
     return missing

@@ -19,9 +19,10 @@ Owner: Bret Jenny / 6Frame Studio.
 1. Fill name + email on `/buy`. The form mints a signed URL (365 days) and shows it immediately. Stripe is optional later.
 2. Paste the URL into the model they already pay for.
 3. In Claude they say they want TrendPilot / Autopilot for their brand and paste their website. The connector calls `onboard` and **asks for their Gemini key, PostProxy key, profile group, and brand/site before any scan or post**.
-4. `setup` saves those keys (never echoed). `set_brand_from_website` pulls voice from their site. Defaults: LinkedIn, X, Instagram, YouTube, Facebook. Daily run 8:00 AM PT.
+4. `setup` saves those keys (never echoed). `set_brand_from_website` pulls voice from their site. Defaults: LinkedIn, X, Instagram, YouTube, Facebook.
 5. `postproxy_connect` returns OAuth links for **their** socials.
 6. `run_autopilot` runs live (`draft=true` first). Mock mode is rejected. No 6Frame stub clips.
+7. `set_automation` turns on their own daily job (default 8:00 AM PT). They choose `require_approval=true` (stage a draft, then `approve_and_publish`) or `require_approval=false` (scan, download the original, post with no click). The MCP URL does not change. Daily automation stays off until they enable it.
 
 The minted URL is path-based so hosts that strip `?token=` (Grok custom connectors) still send the license:
 
@@ -78,7 +79,9 @@ Antigravity uses `serverUrl` (not `url`) in `~/.gemini/antigravity/mcp_config.js
 | `write_copy` | Voice + guaranteed hashtags. |
 | `publish` | PostProxy, split by aspect. |
 | `run_autopilot` | Full spine. `mock=true` is for tests only. |
-| `status` / `last_run` | Config (masked) and last run. |
+| `set_automation` | Enable/disable this buyer's daily scan → download → post. Approval on or off. |
+| `approve_and_publish` | Post the last staged draft when `require_approval` is on. |
+| `status` / `last_run` | Config (masked), automation schedule, and last run. |
 
 Hashtag caps: LinkedIn/Facebook 5–8, IG/TikTok/YouTube 8–12, X 1–2 on the last tweet under 280. Locked tags: `#6FrameStudio` `#AIFilmmaking` `#AICinema`.
 

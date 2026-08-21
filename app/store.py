@@ -7,9 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from app.config import (
+    DEFAULT_BRAND_VOICE,
     DEFAULT_DAILY_HOUR,
     DEFAULT_DAILY_TIMEZONE,
+    LOCKED_HASHTAGS,
     ONBOARD_PLATFORMS,
+    OWNER_BUYER_ID,
+    STUDIO_NAME,
+    STUDIO_WEBSITE,
     data_dir,
 )
 from app.platforms import normalize_platforms
@@ -18,6 +23,19 @@ from app.tokens import mint_token
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def parse_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _buyer_path(buyer_id: str) -> Path:
@@ -71,11 +89,39 @@ def ensure_buyer(
         "platforms": list(ONBOARD_PLATFORMS),
         "daily_run_hour": DEFAULT_DAILY_HOUR,
         "daily_run_timezone": DEFAULT_DAILY_TIMEZONE,
+        "automation_enabled": False,
+        "require_approval": True,
+        "last_automation_date": "",
         "public_base_url": "",
         "last_run": None,
     }
     _write(_buyer_path(buyer_id), record)
-    return record
+    return apply_owner_studio_brand(record)
+
+
+def apply_owner_studio_brand(record: dict[str, Any]) -> dict[str, Any]:
+    """Owner beta license starts as 6Frame Studio. Do not keep IAN as a leftover."""
+    if str(record.get("buyer_id") or "") != OWNER_BUYER_ID:
+        return record
+    name = str(record.get("brand_name") or "").strip()
+    website = str(record.get("website_url") or "").strip().lower()
+    is_ian = "iangroup" in website or name.upper().replace(" ", "").startswith("IAN")
+    if name and website and not is_ian:
+        return record
+    record["brand_name"] = STUDIO_NAME
+    record["website_url"] = STUDIO_WEBSITE
+    record["brand_voice"] = str(record.get("brand_voice") or "").strip() or DEFAULT_BRAND_VOICE
+    record["brand_hashtags"] = list(record.get("brand_hashtags") or LOCKED_HASHTAGS)
+    return save_buyer(record)
+
+
+def clear_buyer_api_keys(buyer_id: str) -> dict[str, Any]:
+    """Drop Gemini and PostProxy keys so onboard asks for the three APIs again."""
+    record = load_buyer(buyer_id) or ensure_buyer(buyer_id)
+    record["gemini_api_key"] = ""
+    record["postproxy_api_key"] = ""
+    record["postproxy_profile_group_id"] = ""
+    return save_buyer(record)
 
 
 def save_buyer(record: dict[str, Any]) -> dict[str, Any]:
@@ -112,6 +158,10 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
                 continue
             record[key] = max(0, min(hour, 23))
             continue
+        if key in {"automation_enabled", "require_approval"}:
+            fallback = True if key == "require_approval" else False
+            record[key] = parse_bool(value, parse_bool(record.get(key), fallback))
+            continue
         if key in {
             "brand_voice",
             "brand_name",
@@ -123,6 +173,7 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
             "note",
             "facebook_page_id",
             "google_location_id",
+            "last_automation_date",
         }:
             record[key] = str(value).strip()
     return save_buyer(record)
@@ -148,6 +199,10 @@ def public_config(record: dict[str, Any]) -> dict[str, Any]:
         "platforms": record.get("platforms") or list(ONBOARD_PLATFORMS),
         "daily_run_hour": record.get("daily_run_hour") or DEFAULT_DAILY_HOUR,
         "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
+        "automation_enabled": bool(record.get("automation_enabled")),
+        "require_approval": record.get("require_approval") is not False,
+        "last_automation_date": record.get("last_automation_date") or None,
+        "pending_approval": bool((record.get("last_run") or {}).get("pending_approval")),
         "public_base_url": record.get("public_base_url") or None,
         "postproxy_profile_group_id": record.get("postproxy_profile_group_id") or None,
         "facebook_page_id": record.get("facebook_page_id") or None,
@@ -190,12 +245,18 @@ def list_leads(limit: int = 50) -> list[dict[str, Any]]:
     return list(reversed(rows[-limit:]))
 
 
-def list_buyers() -> list[dict[str, Any]]:
+def iter_buyer_records() -> list[dict[str, Any]]:
     folder = data_dir() / "buyers"
-    out = []
+    out: list[dict[str, Any]] = []
+    if not folder.exists():
+        return out
     for path in sorted(folder.glob("*.json")):
         try:
-            out.append(public_config(json.loads(path.read_text(encoding="utf-8"))))
+            out.append(json.loads(path.read_text(encoding="utf-8")))
         except json.JSONDecodeError:
             continue
     return out
+
+
+def list_buyers() -> list[dict[str, Any]]:
+    return [public_config(record) for record in iter_buyer_records()]

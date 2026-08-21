@@ -15,8 +15,8 @@ from app.store import ensure_buyer, public_config, save_buyer
 @pytest.mark.asyncio
 async def test_run_autopilot_mock_path() -> None:
     record = ensure_buyer("mock-studio", email="mock@studio.test")
-    record["brand_name"] = "IAN Group"
-    record["brand_hashtags"] = ["#IANGroup"]
+    record["brand_name"] = "North Light"
+    record["brand_hashtags"] = ["#NorthLight"]
     record["platforms"] = ["instagram", "youtube", "facebook", "linkedin", "twitter"]
     record = save_buyer(record)
     result = await run_autopilot(record, niche="AI filmmaking", mock=True)
@@ -26,7 +26,7 @@ async def test_run_autopilot_mock_path() -> None:
     assert result["media"]["vertical"].endswith("9x16.mp4")
     assert result["media"]["landscape"].endswith("16x9.mp4")
     captions = result["copy"]["captions"]
-    assert "#IANGroup" in captions["instagram"]
+    assert "#NorthLight" in captions["instagram"]
     assert "#6FrameStudio" not in captions["instagram"]
     assert "#Shorts" in result["copy"]["youtube_title"]
     assert "instagram" in result["publish"]["batches"]["vertical_9x16"]

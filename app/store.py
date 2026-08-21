@@ -7,9 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from app.config import (
+    DEFAULT_BRAND_VOICE,
     DEFAULT_DAILY_HOUR,
     DEFAULT_DAILY_TIMEZONE,
+    LOCKED_HASHTAGS,
     ONBOARD_PLATFORMS,
+    OWNER_BUYER_ID,
+    STUDIO_NAME,
+    STUDIO_WEBSITE,
     data_dir,
 )
 from app.platforms import normalize_platforms
@@ -91,7 +96,23 @@ def ensure_buyer(
         "last_run": None,
     }
     _write(_buyer_path(buyer_id), record)
-    return record
+    return apply_owner_studio_brand(record)
+
+
+def apply_owner_studio_brand(record: dict[str, Any]) -> dict[str, Any]:
+    """Owner beta license starts as 6Frame Studio. Do not keep IAN as a leftover."""
+    if str(record.get("buyer_id") or "") != OWNER_BUYER_ID:
+        return record
+    name = str(record.get("brand_name") or "").strip()
+    website = str(record.get("website_url") or "").strip().lower()
+    is_ian = "iangroup" in website or name.upper().replace(" ", "").startswith("IAN")
+    if name and website and not is_ian:
+        return record
+    record["brand_name"] = STUDIO_NAME
+    record["website_url"] = STUDIO_WEBSITE
+    record["brand_voice"] = str(record.get("brand_voice") or "").strip() or DEFAULT_BRAND_VOICE
+    record["brand_hashtags"] = list(record.get("brand_hashtags") or LOCKED_HASHTAGS)
+    return save_buyer(record)
 
 
 def save_buyer(record: dict[str, Any]) -> dict[str, Any]:

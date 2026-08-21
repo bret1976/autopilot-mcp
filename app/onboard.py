@@ -93,13 +93,18 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
             + "\n\nPaste those here. I will save them with setup (keys are never printed back), "
             "then send OAuth links so you can connect each network on your PostProxy account. "
             f"Default platforms: {', '.join(ONBOARD_PLATFORMS)}. "
-            f"Daily run defaults to {DEFAULT_DAILY_HOUR:02d}:00 {DEFAULT_DAILY_TIMEZONE} (8:00 AM PT)."
+            f"Daily automation is off until they turn it on. Default time is "
+            f"{DEFAULT_DAILY_HOUR:02d}:00 {DEFAULT_DAILY_TIMEZONE} (8:00 AM PT). "
+            "They can require human approval before each post, or turn approval off "
+            "so the daily scan downloads the original and posts on its own."
         )
     else:
         say = (
             "Keys and brand are in. Next I will send PostProxy OAuth links for each platform "
-            "you want live. After you finish those, say Run Autopilot — first cut is a draft "
-            "so you can check it, then we publish live."
+            "you want live. After you finish those, they can say Run Autopilot for a one-off, "
+            "or call set_automation to turn on a daily scan → download → post. "
+            "Ask whether they want require_approval=true (stage a draft, then approve_and_publish) "
+            "or require_approval=false (auto-post, no click)."
         )
     return {
         "ready": ready,
@@ -113,11 +118,14 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
             "Call postproxy_connect for linkedin, twitter, instagram, youtube, facebook.",
             "Open each returned URL and finish OAuth on the buyer's own accounts.",
             "Call run_autopilot with draft=true for the first live cut.",
+            "Ask if they want daily automation. Then call set_automation.",
         ],
         "defaults": {
             "platforms": list(record.get("platforms") or ONBOARD_PLATFORMS),
             "daily_run_hour": record.get("daily_run_hour") or DEFAULT_DAILY_HOUR,
             "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
+            "automation_enabled": False,
+            "require_approval": True,
         },
     }
 

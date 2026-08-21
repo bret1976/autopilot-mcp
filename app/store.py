@@ -20,6 +20,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def parse_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _buyer_path(buyer_id: str) -> Path:
     return data_dir() / "buyers" / f"{buyer_id}.json"
 
@@ -71,6 +84,9 @@ def ensure_buyer(
         "platforms": list(ONBOARD_PLATFORMS),
         "daily_run_hour": DEFAULT_DAILY_HOUR,
         "daily_run_timezone": DEFAULT_DAILY_TIMEZONE,
+        "automation_enabled": False,
+        "require_approval": True,
+        "last_automation_date": "",
         "public_base_url": "",
         "last_run": None,
     }
@@ -112,6 +128,10 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
                 continue
             record[key] = max(0, min(hour, 23))
             continue
+        if key in {"automation_enabled", "require_approval"}:
+            fallback = True if key == "require_approval" else False
+            record[key] = parse_bool(value, parse_bool(record.get(key), fallback))
+            continue
         if key in {
             "brand_voice",
             "brand_name",
@@ -123,6 +143,7 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
             "note",
             "facebook_page_id",
             "google_location_id",
+            "last_automation_date",
         }:
             record[key] = str(value).strip()
     return save_buyer(record)
@@ -148,6 +169,10 @@ def public_config(record: dict[str, Any]) -> dict[str, Any]:
         "platforms": record.get("platforms") or list(ONBOARD_PLATFORMS),
         "daily_run_hour": record.get("daily_run_hour") or DEFAULT_DAILY_HOUR,
         "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
+        "automation_enabled": bool(record.get("automation_enabled")),
+        "require_approval": record.get("require_approval") is not False,
+        "last_automation_date": record.get("last_automation_date") or None,
+        "pending_approval": bool((record.get("last_run") or {}).get("pending_approval")),
         "public_base_url": record.get("public_base_url") or None,
         "postproxy_profile_group_id": record.get("postproxy_profile_group_id") or None,
         "facebook_page_id": record.get("facebook_page_id") or None,
@@ -190,12 +215,18 @@ def list_leads(limit: int = 50) -> list[dict[str, Any]]:
     return list(reversed(rows[-limit:]))
 
 
-def list_buyers() -> list[dict[str, Any]]:
+def iter_buyer_records() -> list[dict[str, Any]]:
     folder = data_dir() / "buyers"
-    out = []
+    out: list[dict[str, Any]] = []
+    if not folder.exists():
+        return out
     for path in sorted(folder.glob("*.json")):
         try:
-            out.append(public_config(json.loads(path.read_text(encoding="utf-8"))))
+            out.append(json.loads(path.read_text(encoding="utf-8")))
         except json.JSONDecodeError:
             continue
     return out
+
+
+def list_buyers() -> list[dict[str, Any]]:
+    return [public_config(record) for record in iter_buyer_records()]

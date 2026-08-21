@@ -383,6 +383,7 @@ async def run_autopilot(
     source_url: str = "",
     mock: bool = False,
     draft: bool = False,
+    via: str = "manual",
 ) -> dict[str, Any]:
     skipped: list[dict[str, str]] = []
     pinned = (source_url or "").strip()
@@ -443,6 +444,9 @@ async def run_autopilot(
     last_run = {
         "at": _stamp(),
         "mocked": mock,
+        "draft": draft,
+        "pending_approval": bool(draft),
+        "via": via,
         "scan": scan,
         "media": {k: v for k, v in media.items() if k != "raw"},
         "copy": copy,

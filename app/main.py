@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import os
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
@@ -37,6 +39,7 @@ from app.http_util import (
     TokenPathMiddleware,
     WellKnownRewriteMiddleware,
 )
+from app.automation import scheduler_loop, scheduler_started
 from app.mcp_server import bind_buyer, buyer_from_request, mcp
 from app.media import buyer_media_dir, verify_media
 from app.oauth import router as oauth_router, www_authenticate
@@ -49,6 +52,20 @@ TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 
 mcp_app = mcp.http_app(path="/", stateless_http=True, transport="streamable-http")
 mcp_app.router.redirect_slashes = False
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with mcp_app.lifespan(app):
+        stop = asyncio.Event()
+        task = asyncio.create_task(scheduler_loop(stop))
+        try:
+            yield
+        finally:
+            stop.set()
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 class LicenseGate(BaseHTTPMiddleware):
@@ -77,7 +94,7 @@ mcp_app.add_middleware(
     expose_headers=["Mcp-Session-Id", "mcp-session-id"],
 )
 
-app = FastAPI(title=PRODUCT_NAME, lifespan=mcp_app.lifespan, redirect_slashes=False)
+app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan, redirect_slashes=False)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.include_router(oauth_router)
 app.mount("/assets", StaticFiles(directory=str(PUBLIC_DIR)), name="assets")
@@ -138,6 +155,7 @@ async def health():
         "data_dir": str(root),
         "data_dir_writable": writable,
         "persist": writable,
+        "scheduler": scheduler_started,
     }
 
 

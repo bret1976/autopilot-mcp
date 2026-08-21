@@ -70,4 +70,12 @@ def test_readiness_and_hashtag_from_name() -> None:
 async def test_onboard_is_registered() -> None:
     tools = await mcp.list_tools()
     names = {tool.name for tool in tools}
-    assert {"onboard", "start", "set_brand_from_website", "setup", "run_autopilot"}.issubset(names)
+    assert {
+        "onboard",
+        "start",
+        "set_brand_from_website",
+        "setup",
+        "run_autopilot",
+        "set_automation",
+        "approve_and_publish",
+    }.issubset(names)

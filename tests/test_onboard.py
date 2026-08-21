@@ -22,9 +22,10 @@ async def test_onboard_and_run_ask_for_buyer_keys() -> None:
     assert "gemini_api_key" in report["missing"]
     assert "postproxy_api_key" in report["missing"]
     assert "website_url" in report["missing"]
+    assert report["missing"][0] == "website_url"
     assert "Gemini API key" in report["say_to_user"]
     assert "PostProxy" in report["say_to_user"]
-    assert "6Frame stub" in report["say_to_user"]
+    assert "three APIs" in report["say_to_user"]
 
     refused = await run_autopilot_tool()
     assert refused["ok"] is False
@@ -58,6 +59,27 @@ async def test_setup_with_brand_marks_ready() -> None:
     assert report["config"]["daily_run_hour"] == 8
     assert "gemini_api_key" not in report["config"]
     assert report["config"]["gemini_key"]
+
+
+@pytest.mark.asyncio
+async def test_brand_then_asks_for_three_apis() -> None:
+    bind_buyer("brand-first")
+    ensure_buyer("brand-first")
+    after_brand = await setup(
+        brand_name="Cory Connects",
+        website_url="https://coryconnects.example",
+        brand_voice="Write as Cory Connects.",
+    )
+    assert after_brand["ready"] is False
+    assert after_brand["needs_setup"] is True
+    assert after_brand["config"]["brand_name"] == "Cory Connects"
+    assert after_brand["missing"] == [
+        "gemini_api_key",
+        "postproxy_api_key",
+        "postproxy_profile_group_id",
+    ]
+    assert "Brand is set" in after_brand["say_to_user"]
+    assert "three APIs" in after_brand["say_to_user"]
 
 
 def test_readiness_and_hashtag_from_name() -> None:

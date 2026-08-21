@@ -115,6 +115,15 @@ def apply_owner_studio_brand(record: dict[str, Any]) -> dict[str, Any]:
     return save_buyer(record)
 
 
+def clear_buyer_api_keys(buyer_id: str) -> dict[str, Any]:
+    """Drop Gemini and PostProxy keys so onboard asks for the three APIs again."""
+    record = load_buyer(buyer_id) or ensure_buyer(buyer_id)
+    record["gemini_api_key"] = ""
+    record["postproxy_api_key"] = ""
+    record["postproxy_profile_group_id"] = ""
+    return save_buyer(record)
+
+
 def save_buyer(record: dict[str, Any]) -> dict[str, Any]:
     record["updated_at"] = _now()
     if "platforms" in record:

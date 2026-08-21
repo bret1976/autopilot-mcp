@@ -220,12 +220,16 @@ class AcceptCompatMiddleware:
 
         headers = MutableHeaders(scope=scope)
         accept = headers.get("accept", "")
-        wants_sse = "text/event-stream" in accept
+        lowered = accept.lower()
+        wants_sse = "text/event-stream" in lowered
+        accepts_json = "application/json" in lowered or "*/*" in lowered or not lowered
         state = scope.setdefault("state", {})
         state["mcp_original_accept"] = accept
         state["mcp_wants_sse"] = wants_sse
         headers["accept"] = "application/json, text/event-stream"
-        prefer_json = not wants_sse
+        # Grok add-connector sends both Accept types then JSON.parses the body.
+        # One-shot initialize is a single SSE event — unwrap it when JSON is allowed.
+        prefer_json = accepts_json or not wants_sse
 
         if not prefer_json:
             await self.app(scope, receive, send)

@@ -83,7 +83,10 @@ def token_from_paste(raw: str | None) -> str | None:
     elif "/mcp/t/" in text:
         text = text.split("/mcp/t/", 1)[1]
     text = text.split("&", 1)[0].split("/", 1)[0].split("#", 1)[0].split("?", 1)[0]
-    return text.strip() or None
+    text = text.strip()
+    if not text or not _TOKEN_RE.match(text):
+        return None
+    return text
 
 
 def extract_token(request: Request) -> str | None:
@@ -101,9 +104,18 @@ def extract_token(request: Request) -> str | None:
     )
     if header_token:
         return header_token.strip()
-    return token_from_paste(
+    from_fields = token_from_paste(
         request.query_params.get("token")
         or request.query_params.get("access_token")
         or request.query_params.get("key")
+        or request.query_params.get("resource")
         or request.path_params.get("token")
     )
+    if from_fields:
+        return from_fields
+    # RFC 9728 inserts the resource path after well-known:
+    # /.well-known/oauth-protected-resource/mcp/t/{token}
+    path = request.url.path if request.url else ""
+    if "/mcp/t/" in path:
+        return token_from_paste(path)
+    return None

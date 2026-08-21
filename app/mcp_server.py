@@ -14,7 +14,15 @@ from app.jobs import is_busy, load_job, spawn_job
 from app.media import MediaError, download_and_cut
 from app.onboard import blocked, fetch_brand_from_website, readiness
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
-from app.store import apply_owner_studio_brand, ensure_buyer, load_buyer, public_config, save_buyer, update_setup
+from app.store import (
+    apply_owner_studio_brand,
+    clear_buyer_api_keys,
+    ensure_buyer,
+    load_buyer,
+    public_config,
+    save_buyer,
+    update_setup,
+)
 from app.tokens import extract_token, verify_token
 
 buyer_id_var: ContextVar[str | None] = ContextVar("buyer_id", default=None)
@@ -34,8 +42,10 @@ mcp = FastMCP(
         "Never invent API keys. Never use a shared Gemini or PostProxy key. "
         "Never enable mock mode. Never dump 6Frame stub clips. "
         "Initial brand is 6Frame Studio. Do not change it on connect. "
-        "The user pastes their own Gemini and PostProxy keys in the host (Grok Build). "
-        "Those are the 6Frame keys; posts go to the user's socials. "
+        "When they paste a company website, pull that brand, THEN ask for the three APIs: "
+        "Gemini API key, PostProxy API key, PostProxy profile group id. "
+        "Do not skip the API step after brand is set. They paste their own keys in the host. "
+        "Those can be the 6Frame keys; posts go to the user's socials. "
         "Only change brand_name/website when the user names a company to beta-test. "
         "Then scan and write as THAT company. Do not invent another brand. "
         "Default platforms: LinkedIn, X, Instagram, YouTube, Facebook. "
@@ -139,14 +149,18 @@ async def setup(
     public_base_url: str | None = None,
     facebook_page_id: str | None = None,
     google_location_id: str | None = None,
+    reset_api_keys: bool = False,
 ) -> dict[str, Any]:
     """Save the buyer's own keys and brand. Secrets are never echoed back.
 
     If website_url is set, TrendPilot pulls brand voice from that site.
     facebook_page_id and google_location_id pin PostProxy placements.
     automation_enabled / require_approval are optional; prefer set_automation.
+    reset_api_keys clears Gemini and PostProxy so onboard asks for the three APIs again.
     """
     record = current_record()
+    if reset_api_keys:
+        record = clear_buyer_api_keys(record["buyer_id"])
     fields: dict[str, Any] = {
         "gemini_api_key": gemini_api_key,
         "postproxy_api_key": postproxy_api_key,
@@ -247,6 +261,12 @@ async def set_brand_from_website(website_url: str, brand_name: str | None = None
     )
     payload = _onboard_payload(saved)
     payload["brand_from_website"] = {k: v for k, v in fetched.items() if k != "brand_voice"}
+    if payload.get("needs_setup"):
+        payload["message"] = (
+            f"Brand is set ({saved.get('brand_name') or fetched.get('brand_name')}). "
+            "Next step: paste your three APIs — Gemini API key, PostProxy API key, "
+            "and PostProxy profile group id."
+        )
     return payload
 
 

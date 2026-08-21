@@ -34,47 +34,50 @@ def hashtags_from_name(name: str) -> list[str]:
     return [compact] if compact else []
 
 
-def missing_fields(record: dict[str, Any]) -> list[dict[str, str]]:
-    missing: list[dict[str, str]] = []
-    if not str(record.get("gemini_api_key") or "").strip():
-        missing.append(
-            {
-                "id": "gemini_api_key",
-                "prompt": "Paste your Gemini API key (https://aistudio.google.com/apikey).",
-                "why": "Required to scan live trends and write your brand's copy. Without it, TrendPilot will not run.",
-            }
-        )
-    if not str(record.get("postproxy_api_key") or "").strip():
-        missing.append(
-            {
-                "id": "postproxy_api_key",
-                "prompt": "Paste your PostProxy API key (https://postproxy.dev).",
-                "why": "Required to post through YOUR socials. We never use a shared PostProxy account.",
-            }
-        )
-    if not str(record.get("postproxy_profile_group_id") or "").strip():
-        missing.append(
-            {
-                "id": "postproxy_profile_group_id",
-                "prompt": "Paste your PostProxy profile group id.",
-                "why": "Needed so OAuth connects LinkedIn / X / Instagram / YouTube / Facebook on your group.",
-            }
-        )
-    if not (
+def _has_brand(record: dict[str, Any]) -> bool:
+    return bool(
         str(record.get("brand_name") or "").strip()
         or str(record.get("website_url") or "").strip()
         or str(record.get("brand_voice") or "").strip()
-    ):
+    )
+
+
+def _api_prompts() -> list[dict[str, str]]:
+    return [
+        {
+            "id": "gemini_api_key",
+            "prompt": "Paste your Gemini API key (https://aistudio.google.com/apikey).",
+            "why": "Required to scan live trends and write this brand's copy.",
+        },
+        {
+            "id": "postproxy_api_key",
+            "prompt": "Paste your PostProxy API key (https://postproxy.dev).",
+            "why": "Required to post through YOUR socials.",
+        },
+        {
+            "id": "postproxy_profile_group_id",
+            "prompt": "Paste your PostProxy profile group id.",
+            "why": "Needed so OAuth connects LinkedIn / X / Instagram / YouTube / Facebook on your group.",
+        },
+    ]
+
+
+def missing_fields(record: dict[str, Any]) -> list[dict[str, str]]:
+    missing: list[dict[str, str]] = []
+    if not _has_brand(record):
         missing.append(
             {
                 "id": "website_url",
                 "prompt": (
-                    f"Initial brand is {STUDIO_NAME} ({STUDIO_WEBSITE}). "
-                    "Leave it. Only name a different company if you are beta-testing that brand."
+                    f"Paste the company website. Initial brand is {STUDIO_NAME} "
+                    f"({STUDIO_WEBSITE}) until you name another company."
                 ),
-                "why": "The connector starts as 6Frame Studio. Do not replace it on connect.",
+                "why": "TrendPilot pulls brand name and voice from that site first.",
             }
         )
+    for item in _api_prompts():
+        if not str(record.get(item["id"]) or "").strip():
+            missing.append(item)
     return missing
 
 
@@ -90,19 +93,26 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
         f"{i}. {item['prompt']} — {item['why']}" for i, item in enumerate(missing, start=1)
     ]
     if missing:
-        say = (
-            "TrendPilot / Autopilot is connected, but it is not ready to scan or post. "
-            "I will not mock, and I will not use 6Frame stub clips. "
-            "Before anything runs, I need YOUR keys and brand:\n\n"
-            + "\n".join(ask)
-            + "\n\nPaste those here. I will save them with setup (keys are never printed back), "
-            "then send OAuth links so you can connect each network on your PostProxy account. "
-            f"Default platforms: {', '.join(ONBOARD_PLATFORMS)}. "
-            f"Daily automation is off until they turn it on. Default time is "
-            f"{DEFAULT_DAILY_HOUR:02d}:00 {DEFAULT_DAILY_TIMEZONE} (8:00 AM PT). "
-            "They can require human approval before each post, or turn approval off "
-            "so the daily scan downloads the original and posts on its own."
-        )
+        if has_brand and not (can_scan and can_publish):
+            brand = str(record.get("brand_name") or "this brand").strip()
+            say = (
+                f"Brand is set ({brand}). Next step: paste your three APIs — "
+                "Gemini API key, PostProxy API key, and PostProxy profile group id. "
+                "I will not mock. Keys are never printed back.\n\n"
+                + "\n".join(ask)
+            )
+        else:
+            say = (
+                "TrendPilot / Autopilot is connected, but it is not ready to scan or post. "
+                "First the brand/website, then your three APIs "
+                "(Gemini, PostProxy key, PostProxy profile group).\n\n"
+                + "\n".join(ask)
+                + "\n\nPaste those here. I will save them with setup (keys are never printed back), "
+                "then send OAuth links so you can connect each network on your PostProxy account. "
+                f"Default platforms: {', '.join(ONBOARD_PLATFORMS)}. "
+                f"Daily automation is off until they turn it on. Default time is "
+                f"{DEFAULT_DAILY_HOUR:02d}:00 {DEFAULT_DAILY_TIMEZONE} (8:00 AM PT)."
+            )
     else:
         say = (
             "Keys and brand are in. Next I will send PostProxy OAuth links for each platform "

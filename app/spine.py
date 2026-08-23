@@ -25,7 +25,7 @@ Prefer a SHORT original (under 90s) in this order: TikTok, Instagram Reel, direc
 Never return a URL from this failed list: {failed}
 Do not invent a new generated film.
 Do not recommend generating Veo, FAL, or Runway footage.
-Do not write as 6Frame Studio unless this brand is 6Frame.
+The website is the brand of record. Write as that brand, not 6Frame, unless the site is 6Frame.
 
 Return JSON only:
 {{
@@ -45,8 +45,10 @@ Niche / filter: {niche}
 Voice reminder: {voice}
 """
 
-COPY_PROMPT = """Rewrite social copy for this cut in THIS brand's voice — not 6Frame unless they are 6Frame.
+COPY_PROMPT = """Rewrite social copy for this cut in THIS brand's voice.
+The website is the brand of record. Write as {brand} ({website}), not 6Frame unless they are 6Frame.
 Never use: game-changer, revolutionize, unlock, next-level, crush, viral hack.
+Do not restore 6Frame voice. Do not use thin meta copy.
 
 Brand: {brand}
 Website: {website}

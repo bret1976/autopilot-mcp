@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html as html_lib
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -7,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import (
+    DEFAULT_BRAND_VOICE,
     DEFAULT_DAILY_HOUR,
     DEFAULT_DAILY_TIMEZONE,
     ONBOARD_PLATFORMS,
@@ -23,6 +25,31 @@ _META = re.compile(
 _META_FLIP = re.compile(
     r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:name|property)=["\']([^"\']+)["\']',
     re.I,
+)
+_SCRIPT = re.compile(r"<script[\s\S]*?</script>", re.I)
+_STYLE = re.compile(r"<style[\s\S]*?</style>", re.I)
+_TAG = re.compile(r"<[^>]+>")
+_WS = re.compile(r"\s+")
+_THIN_META = re.compile(
+    r"website concept|lorem ipsum|coming soon|just a concept|placeholder",
+    re.I,
+)
+_CAMEL = re.compile(r"([a-z])([A-Z])")
+_WORD_PHRASE = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:[\s\-&]+[A-Za-z][A-Za-z0-9]*){0,3}")
+_HOST_SUFFIXES = (
+    "connects",
+    "studio",
+    "studios",
+    "group",
+    "media",
+    "labs",
+    "lab",
+    "films",
+    "film",
+    "works",
+    "digital",
+    "agency",
+    "coaching",
 )
 
 
@@ -69,10 +96,10 @@ def missing_fields(record: dict[str, Any]) -> list[dict[str, str]]:
             {
                 "id": "website_url",
                 "prompt": (
-                    f"Paste the company website. Initial brand is {STUDIO_NAME} "
-                    f"({STUDIO_WEBSITE}) until you name another company."
+                    "Paste the company website. That site becomes the brand of record "
+                    f"(name + voice). {STUDIO_NAME} is only a placeholder until then."
                 ),
-                "why": "TrendPilot pulls brand name and voice from that site first.",
+                "why": "Copy must match the website they entered, not the initial studio brand.",
             }
         )
     for item in _api_prompts():
@@ -95,8 +122,11 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
     if missing:
         if has_brand and not (can_scan and can_publish):
             brand = str(record.get("brand_name") or "this brand").strip()
+            site = str(record.get("website_url") or "").strip()
+            site_bit = f" from {site}" if site else ""
             say = (
-                f"Brand is set ({brand}). Next step: paste your three APIs — "
+                f"Brand is set ({brand}{site_bit}). That website is the brand of record — "
+                "do not restore 6Frame Studio. Next step: paste your three APIs — "
                 "Gemini API key, PostProxy API key, and PostProxy profile group id. "
                 "I will not mock. Keys are never printed back.\n\n"
                 + "\n".join(ask)
@@ -186,6 +216,155 @@ def normalize_website(url: str) -> str:
     return text
 
 
+def website_host(url: str) -> str:
+    parsed = urlparse(normalize_website(url))
+    host = (parsed.hostname or parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def website_slug(url: str) -> str:
+    host = website_host(url)
+    return host.split(".")[0] if host else ""
+
+
+def is_studio_website(url: str) -> bool:
+    return "6framestudio" in website_host(url)
+
+
+def compact_brand(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def split_camel(word: str) -> str:
+    return _CAMEL.sub(r"\1 \2", word).replace("-", " ").replace("_", " ")
+
+
+def brand_name_from_host(url: str) -> str:
+    """The pasted website is the brand. coryconnects.tech → Cory Connects."""
+    host = website_host(url)
+    if not host:
+        return ""
+    if "6framestudio" in host:
+        return STUDIO_NAME
+    slug = host.split(".")[0]
+    for suffix in _HOST_SUFFIXES:
+        if slug.lower().endswith(suffix) and len(slug) > len(suffix):
+            head = slug[: -len(suffix)]
+            return f"{head[:1].upper() + head[1:]} {suffix[:1].upper() + suffix[1:]}"
+    spaced = slug.replace("-", " ").replace("_", " ")
+    return " ".join(part[:1].upper() + part[1:] for part in spaced.split() if part)
+
+
+def _is_thin(text: str) -> bool:
+    clean = _WS.sub(" ", (text or "")).strip()
+    if len(clean) < 60:
+        return True
+    return bool(_THIN_META.search(clean))
+
+
+def visible_lines(html: str) -> list[str]:
+    text = _SCRIPT.sub(" ", html or "")
+    text = _STYLE.sub(" ", text)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</(?:p|div|h1|h2|h3|h4|li|section|article)>", "\n", text, flags=re.I)
+    text = _TAG.sub(" ", text)
+    text = html_lib.unescape(text)
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        line = _WS.sub(" ", raw).strip()
+        if len(line) < 3 or line.lower() in seen:
+            continue
+        seen.add(line.lower())
+        lines.append(line)
+    return lines
+
+
+def brand_mention_from_page(text: str, url: str) -> str:
+    slug = compact_brand(website_slug(url))
+    if not slug or len(slug) < 4:
+        return ""
+    for match in _WORD_PHRASE.finditer(text or ""):
+        phrase = match.group(0).strip()
+        compact = compact_brand(phrase)
+        if compact == slug:
+            return _WS.sub(" ", split_camel(phrase)).strip()
+        if compact.startswith(slug) and len(compact) <= len(slug) + 12:
+            head = phrase.split("-", 1)[0].split(" ", 1)[0] if "-" in phrase else phrase
+            if compact_brand(head) == slug or compact_brand(split_camel(head).replace(" ", "")) == slug:
+                return _WS.sub(" ", split_camel(head)).strip()
+    return ""
+
+
+def homepage_copy(lines: list[str], *, skip: str = "") -> str:
+    skip_c = compact_brand(skip)
+    chunks: list[str] = []
+    for line in lines:
+        if len(line) < 40:
+            continue
+        if skip_c and compact_brand(line) == skip_c:
+            continue
+        if _is_thin(line) and len(line) < 160:
+            continue
+        chunks.append(line)
+        if sum(len(item) for item in chunks) >= 900:
+            break
+    return " ".join(chunks)
+
+
+def brand_from_html(html: str, website: str) -> dict[str, Any]:
+    """Website they pasted is the brand of record. Homepage body beats thin meta."""
+    meta = _meta_map(html)
+    title_match = _TITLE.search(html or "")
+    title = _WS.sub(" ", title_match.group(1)).strip() if title_match else ""
+    site = meta.get("og:site_name") or meta.get("application-name") or ""
+    description = (
+        meta.get("og:description")
+        or meta.get("description")
+        or meta.get("twitter:description")
+        or ""
+    )
+    lines = visible_lines(html)
+    page_text = "\n".join(lines)
+    host_brand = brand_name_from_host(website)
+    mentioned = brand_mention_from_page(page_text, website)
+    brand_name = mentioned or host_brand or site or (
+        title.split("|")[0].split("—")[0].split(" - ")[0].strip() if title else ""
+    )
+    body = homepage_copy(lines, skip=title)
+    usable_meta = "" if _is_thin(description) else description
+    source = body or usable_meta or title
+    voice = (
+        f"Write as {brand_name or 'this brand'}. "
+        f"This website is the brand of record: {website}. "
+        "Do not write as 6Frame Studio unless this brand is 6Frame. "
+        "Match their public homepage — first person as this brand, not a growth desk, "
+        "not thin meta copy, not the initial studio voice.\n\n"
+        f"{source}"
+    )
+    return {
+        "website_url": website,
+        "brand_name": brand_name,
+        "page_title": title,
+        "description": description,
+        "homepage_copy": body[:900],
+        "brand_voice": voice[:2400],
+        "brand_hashtags": hashtags_from_name(brand_name),
+        "source": "homepage" if body else ("meta" if usable_meta else "title"),
+    }
+
+
+def is_studio_voice(voice: str) -> bool:
+    text = (voice or "").strip()
+    if not text:
+        return False
+    if text == DEFAULT_BRAND_VOICE:
+        return True
+    return "cinematic, precise, restrained" in text.lower() and "6frame" in text.lower()
+
+
 async def fetch_brand_from_website(url: str) -> dict[str, Any]:
     website = normalize_website(url)
     if not website:
@@ -200,29 +379,7 @@ async def fetch_brand_from_website(url: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Could not fetch {website}: {exc}", "website_url": website}
 
-    meta = _meta_map(html)
-    title_match = _TITLE.search(html)
-    title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else ""
-    site = meta.get("og:site_name") or meta.get("application-name") or ""
-    description = (
-        meta.get("og:description")
-        or meta.get("description")
-        or meta.get("twitter:description")
-        or ""
-    )
-    brand_name = site or (title.split("|")[0].split("—")[0].split("-")[0].strip() if title else "")
-    voice = (
-        f"Write as {brand_name or 'this brand'}. "
-        f"Site: {website}. "
-        f"{description or title or 'Match the tone of the public homepage — no generic growth-desk voice.'} "
-        "Do not write as 6Frame Studio unless this brand is 6Frame."
-    )
-    return {
-        "ok": True,
-        "website_url": website,
-        "brand_name": brand_name,
-        "page_title": title,
-        "description": description,
-        "brand_voice": voice[:1200],
-        "brand_hashtags": hashtags_from_name(brand_name),
-    }
+    parsed = brand_from_html(html, str(response.url) if getattr(response, "url", None) else website)
+    parsed["ok"] = True
+    parsed["website_url"] = website
+    return parsed

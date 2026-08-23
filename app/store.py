@@ -17,6 +17,7 @@ from app.config import (
     STUDIO_WEBSITE,
     data_dir,
 )
+from app.onboard import brand_name_from_host, hashtags_from_name, is_studio_voice, is_studio_website
 from app.platforms import normalize_platforms
 from app.tokens import mint_token
 
@@ -100,13 +101,40 @@ def ensure_buyer(
 
 
 def apply_owner_studio_brand(record: dict[str, Any]) -> dict[str, Any]:
-    """Owner beta license starts as 6Frame Studio. Do not keep IAN as a leftover."""
+    """Owner starts as 6Frame. A pasted website is the brand of record — never restore 6Frame over it."""
     if str(record.get("buyer_id") or "") != OWNER_BUYER_ID:
         return record
     name = str(record.get("brand_name") or "").strip()
-    website = str(record.get("website_url") or "").strip().lower()
-    is_ian = "iangroup" in website or name.upper().replace(" ", "").startswith("IAN")
-    if name and website and not is_ian:
+    website = str(record.get("website_url") or "").strip()
+    website_l = website.lower()
+    is_ian = "iangroup" in website_l or name.upper().replace(" ", "").startswith("IAN")
+    if is_ian:
+        record["brand_name"] = STUDIO_NAME
+        record["website_url"] = STUDIO_WEBSITE
+        record["brand_voice"] = DEFAULT_BRAND_VOICE
+        record["brand_hashtags"] = list(LOCKED_HASHTAGS)
+        return save_buyer(record)
+    if website and not is_studio_website(website):
+        changed = False
+        if not name or name == STUDIO_NAME:
+            record["brand_name"] = brand_name_from_host(website) or name
+            changed = True
+        voice = str(record.get("brand_voice") or "").strip()
+        if not voice or is_studio_voice(voice):
+            brand = record["brand_name"] or brand_name_from_host(website)
+            record["brand_voice"] = (
+                f"Write as {brand}. This website is the brand of record: {website}. "
+                "Do not write as 6Frame Studio unless this brand is 6Frame. "
+                "Match the public homepage."
+            )
+            changed = True
+        if not record.get("brand_hashtags"):
+            record["brand_hashtags"] = hashtags_from_name(str(record.get("brand_name") or ""))
+            changed = True
+        return save_buyer(record) if changed else record
+    if name and website and name != STUDIO_NAME:
+        return record
+    if name or website:
         return record
     record["brand_name"] = STUDIO_NAME
     record["website_url"] = STUDIO_WEBSITE

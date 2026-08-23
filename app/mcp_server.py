@@ -41,13 +41,15 @@ mcp = FastMCP(
         "until onboard.ready is true. "
         "Never invent API keys. Never use a shared Gemini or PostProxy key. "
         "Never enable mock mode. Never dump 6Frame stub clips. "
-        "Initial brand is 6Frame Studio. Do not change it on connect. "
-        "When they paste a company website, pull that brand, THEN ask for the three APIs: "
-        "Gemini API key, PostProxy API key, PostProxy profile group id. "
+        "6Frame Studio is only the placeholder until they paste a company website. "
+        "The website they enter IS the brand of record — name, voice, and copy. "
+        "Call set_brand_from_website (or setup with website_url) and keep that brand. "
+        "Do not restore 6Frame after a website is set. Do not prefer the initial studio voice. "
+        "If scrape looks thin, call set_brand_from_website again — never fall back to 6Frame. "
+        "THEN ask for the three APIs: Gemini API key, PostProxy API key, PostProxy profile group id. "
         "Do not skip the API step after brand is set. They paste their own keys in the host. "
         "Those can be the 6Frame keys; posts go to the user's socials. "
-        "Only change brand_name/website when the user names a company to beta-test. "
-        "Then scan and write as THAT company. Do not invent another brand. "
+        "Scan and write as the website's brand. Do not invent another brand. "
         "Default platforms: LinkedIn, X, Instagram, YouTube, Facebook. "
         "The paste-a-URL license does not change. After keys are wired, offer set_automation. "
         "Daily automation is off until they enable it. They choose require_approval=true "
@@ -179,23 +181,23 @@ async def setup(
         "google_location_id": google_location_id,
     }
     saved = update_setup(record["buyer_id"], fields)
-    if website_url and not brand_voice:
+    extra: dict[str, Any] = {}
+    if website_url:
         fetched = await fetch_brand_from_website(website_url)
         if fetched.get("ok"):
+            keep_voice = bool(brand_voice and len(brand_voice.strip()) > 400)
             saved = update_setup(
                 record["buyer_id"],
                 {
                     "website_url": fetched.get("website_url"),
                     "brand_name": brand_name or fetched.get("brand_name"),
-                    "brand_voice": fetched.get("brand_voice"),
+                    "brand_voice": brand_voice if keep_voice else fetched.get("brand_voice"),
                     "brand_hashtags": brand_hashtags or fetched.get("brand_hashtags"),
                 },
             )
             extra = {"brand_from_website": {k: v for k, v in fetched.items() if k != "brand_voice"}}
         else:
             extra = {"brand_from_website": fetched}
-    else:
-        extra = {}
     payload = _onboard_payload(saved)
     payload.update(extra)
     payload["message"] = (
@@ -246,7 +248,7 @@ async def configure(
 
 @mcp.tool
 async def set_brand_from_website(website_url: str, brand_name: str | None = None) -> dict[str, Any]:
-    """Pull brand name + voice from the buyer's website. Does not invent keys."""
+    """Set the brand from the website they pasted. That site is the brand of record."""
     fetched = await fetch_brand_from_website(website_url)
     if not fetched.get("ok"):
         return fetched

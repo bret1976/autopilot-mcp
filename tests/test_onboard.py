@@ -85,7 +85,7 @@ async def test_brand_then_asks_for_three_apis() -> None:
         "postproxy_api_key",
         "postproxy_profile_group_id",
     ]
-    assert "I've got your brand" in after_brand["say_to_user"]
+    assert "Company branded" in after_brand["say_to_user"]
     assert "three APIs" in after_brand["say_to_user"]
 
     after_keys = await setup(
@@ -94,8 +94,10 @@ async def test_brand_then_asks_for_three_apis() -> None:
         postproxy_profile_group_id="grp_test",
     )
     assert after_keys["ready"] is True
-    assert "auto-post" in after_keys["say_to_user"].lower() or "draft=false" in after_keys["say_to_user"]
-    assert "set_automation" not in after_keys["say_to_user"]
+    assert "draft=false" in after_keys["say_to_user"]
+    assert after_keys["say_to_user"].index("run_autopilot") < after_keys["say_to_user"].index(
+        "set_automation"
+    )
     assert "draft=true" not in " ".join(after_keys["next_after_keys"])
 
 
@@ -158,7 +160,7 @@ async def test_new_website_resets_previous_company_keys() -> None:
         "postproxy_api_key",
         "postproxy_profile_group_id",
     ]
-    assert "I've got your brand" in switched["say_to_user"]
+    assert "Company branded" in switched["say_to_user"]
 
 
 def test_readiness_and_hashtag_from_name() -> None:
@@ -215,6 +217,33 @@ def test_brand_from_host_and_homepage_not_thin_meta() -> None:
     assert "public signal" in parsed["brand_voice"]
     assert "brand of record" in parsed["brand_voice"]
     assert "Do not write as 6Frame" in parsed["brand_voice"]
+
+
+@pytest.mark.asyncio
+async def test_onboard_with_website_locks_brand_and_asks_apis(monkeypatch) -> None:
+    bind_buyer("site-first")
+    ensure_buyer("site-first")
+
+    async def fake_fetch(url: str) -> dict:
+        return {
+            "ok": True,
+            "website_url": "https://www.sqs.world/",
+            "brand_name": "Secured Quantum Services",
+            "brand_voice": "Write as Secured Quantum Services.",
+            "brand_hashtags": ["#SecuredQuantumServices"],
+        }
+
+    monkeypatch.setattr("app.mcp_server.fetch_brand_from_website", fake_fetch)
+    result = await onboard(website_url="https://www.sqs.world/")
+    assert result["ready"] is False
+    assert result["config"]["brand_name"] == "Secured Quantum Services"
+    assert result["missing"] == [
+        "gemini_api_key",
+        "postproxy_api_key",
+        "postproxy_profile_group_id",
+    ]
+    assert "Company branded" in (result.get("message") or result["say_to_user"])
+    assert "gemini" in result["say_to_user"].lower()
 
 
 @pytest.mark.asyncio

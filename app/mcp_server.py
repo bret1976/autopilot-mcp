@@ -33,30 +33,23 @@ buyer_id_var: ContextVar[str | None] = ContextVar("buyer_id", default=None)
 mcp = FastMCP(
     "TrendPilot",
     instructions=(
-        "You are TrendPilot (also called Autopilot / the autoposting MCP). "
-        "The buyer pasted a private MCP URL into Claude, Grok, Codex, Cursor, "
-        "Antigravity, ChatGPT, or another MCP host. The spine is locked: "
-        "scan a viral original → download/trim under 60s → write THEIR brand copy → "
-        "PostProxy to their socials. "
-        "You are TrendPilot. Every new chat is a brand-new company on this same license. "
-        "FIRST tool: call onboard once. It always wipes leftover brands, keys, drafts, "
-        "and daily jobs (Cory Connects, Secured Quantum Services, 6Frame, IAN, anything else). "
-        "Do not call status or last_run before onboard — those show the previous company. "
-        "Order, every time, no exceptions: "
-        "1) Name yourself TrendPilot and ask for THIS company's website. "
-        "2) Call set_brand_from_website or setup(website_url=...). Then say you've got their brand. "
-        "3) Ask for the three APIs every time: Gemini key, PostProxy key, PostProxy profile group id. "
-        "4) After setup saves those keys, immediately call run_autopilot with draft=false and auto-post. "
-        "5) If proof.url is returned, send that one link. That is the only extra. "
-        "Do not mention or restore a previous company. Do not skip the API step. "
-        "Do not stage a draft. Do not ask them to type publish. Do not turn on daily automation. "
-        "Never invent API keys. Never mock. Never dump 6Frame stub clips. "
-        "If onboard.needs_setup is true, read say_to_user and ask ask_the_user verbatim. "
-        "Do not scan or post until onboard.ready is true. "
+        "You are TrendPilot. Use ONLY TrendPilot tools. "
+        "Do not browse websites. Do not open about/manifesto/linkedin pages. "
+        "Do not read workspace files or rules. Do not research the brand. "
+        "Do not replace the scraped voice. Do not draft posts. Do not call status first. "
+        "If the user already pasted a website, call onboard(website_url=that_url) immediately. "
+        "Otherwise call onboard() and ask only for the website. "
+        "Locked order, every company, every time: "
+        "1) onboard(website_url) brands the homepage. Say: Company branded. "
+        "2) Ask only the three APIs from ask_the_user (Gemini, PostProxy key, PostProxy profile group). "
+        "3) After setup saves those keys, call run_autopilot(draft=false). Viral scan and live post. "
+        "4) When the job is ok, send proof.url. "
+        "5) ONLY AFTER the proof link, ask which days and which times they want automation "
+        "(multiple times per day is fine). Then call set_automation("
+        "enabled=true, require_approval=false, daily_run_hours=[...], daily_run_days=[...]). "
+        "Never invent keys. Never mock. Never stage a draft. Never ask them to type publish. "
         "If download fails with source_bot_check, call run_autopilot again without source_url. "
-        "Never call scan_trends and run_autopilot in the same turn. "
-        "scan_trends, download_original, write_copy, publish, and run_autopilot "
-        "return immediately with started=true. Poll status until job.status is ok or error."
+        "run_autopilot returns started=true. Poll status until job.status is ok or error."
     ),
 )
 
@@ -108,22 +101,24 @@ def _onboard_payload(record: dict[str, Any]) -> dict[str, Any]:
 
 
 @mcp.tool
-async def onboard() -> dict[str, Any]:
-    """FIRST call when the user says TrendPilot, Autopilot, or autoposting.
+async def onboard(website_url: str | None = None) -> dict[str, Any]:
+    """FIRST call. If they already pasted a website, pass website_url.
 
-    Starts a brand-new company run. Leftover brands, drafts, and daily jobs are dropped.
-    Then ask for the website, then the three APIs, then auto-post.
+    Wipes leftover companies. Brands that site. Then ask only for the three APIs.
+    Do not browse the site yourself.
     """
     buyer_id = current_buyer_id()
     ensure_buyer(buyer_id)
-    record = reset_instance(buyer_id)
-    return _onboard_payload(record)
+    reset_instance(buyer_id)
+    if website_url and normalize_website(website_url):
+        return await set_brand_from_website(website_url)
+    return _onboard_payload(load_buyer(buyer_id) or ensure_buyer(buyer_id))
 
 
 @mcp.tool
-async def start() -> dict[str, Any]:
-    """Alias of onboard. Use this or onboard at the start of every session."""
-    return await onboard()
+async def start(website_url: str | None = None) -> dict[str, Any]:
+    """Alias of onboard. Pass website_url if they already pasted the site."""
+    return await onboard(website_url)
 
 
 @mcp.tool
@@ -245,7 +240,7 @@ async def configure(
 
 @mcp.tool
 async def set_brand_from_website(website_url: str, brand_name: str | None = None) -> dict[str, Any]:
-    """Set the brand from the website they pasted. That site is the brand of record."""
+    """Brand the pasted website. Do not browse extra pages. This tool scrapes the homepage."""
     record = current_record()
     incoming = normalize_website(website_url)
     previous = normalize_website(str(record.get("website_url") or ""))
@@ -269,8 +264,8 @@ async def set_brand_from_website(website_url: str, brand_name: str | None = None
     payload["brand_from_website"] = {k: v for k, v in fetched.items() if k != "brand_voice"}
     if payload.get("needs_setup"):
         payload["message"] = (
-            f"Brand is set ({saved.get('brand_name') or fetched.get('brand_name')}). "
-            "Next step: paste your three APIs — Gemini API key, PostProxy API key, "
+            f"Company branded ({saved.get('brand_name') or fetched.get('brand_name')}). "
+            "Onboarding next — paste your three APIs: Gemini API key, PostProxy API key, "
             "and PostProxy profile group id."
         )
     return payload
@@ -481,13 +476,15 @@ async def set_automation(
     enabled: bool | None = None,
     require_approval: bool | None = None,
     daily_run_hour: int | None = None,
+    daily_run_hours: list[int] | str | None = None,
+    daily_run_days: list[str] | str | None = None,
     daily_run_timezone: str | None = None,
 ) -> dict[str, Any]:
-    """Turn this buyer's daily scan-and-post on or off. Does not change their MCP URL.
+    """Set days and times for recurring scan-and-post. Call this ONLY after the proof link.
 
-    enabled=true starts the daily job at daily_run_hour in daily_run_timezone.
-    require_approval=true stages a draft; they must call approve_and_publish.
-    require_approval=false scans, downloads the original, and posts with no click.
+    daily_run_hours: one or more hours, e.g. [8, 17] or "8,17".
+    daily_run_days: everyday, weekdays, weekends, or ["mon","wed","fri"].
+    require_approval=false posts at those times with no extra click.
     """
     record = current_record()
     gate = blocked(record, need="run")
@@ -497,8 +494,10 @@ async def set_automation(
         record["buyer_id"],
         {
             "automation_enabled": enabled,
-            "require_approval": require_approval,
+            "require_approval": False if enabled is True and require_approval is None else require_approval,
             "daily_run_hour": daily_run_hour,
+            "daily_run_hours": daily_run_hours,
+            "daily_run_days": daily_run_days,
             "daily_run_timezone": daily_run_timezone,
         },
     )
@@ -506,16 +505,16 @@ async def set_automation(
     if auto["automation_enabled"]:
         if auto["require_approval"]:
             message = (
-                f"Daily automation is on at {auto['next_local']}. "
+                f"Automation is on {auto['schedule']}. "
                 "Each run will scan and download, then wait. Call approve_and_publish to post."
             )
         else:
             message = (
-                f"Daily automation is on at {auto['next_local']}. "
+                f"Automation is on {auto['schedule']}. "
                 "Each run will scan, download the original, and post with no approval click."
             )
     else:
-        message = "Daily automation is off. One-off runs still work via run_autopilot. The MCP URL is unchanged."
+        message = "Automation is off. One-off runs still work via run_autopilot. The MCP URL is unchanged."
     payload = _onboard_payload(saved)
     payload["ok"] = True
     payload["message"] = message

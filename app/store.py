@@ -18,6 +18,81 @@ from app.onboard import brand_name_from_host, hashtags_from_name, is_studio_voic
 from app.platforms import normalize_platforms
 from app.tokens import mint_token
 
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def normalize_hours(value: Any) -> list[int]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, (int, float)):
+        return [max(0, min(int(value), 23))]
+    items: list[Any]
+    if isinstance(value, str):
+        items = [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+    elif isinstance(value, list):
+        items = value
+    else:
+        return []
+    hours: list[int] = []
+    for item in items:
+        text = str(item).strip().lower().replace("am", "").replace("pm", "")
+        text = text.split(":", 1)[0].strip()
+        try:
+            hours.append(max(0, min(int(float(text)), 23)))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(hours))
+
+
+def normalize_days(value: Any) -> list[int]:
+    if value is None or value == "":
+        return list(range(7))
+    if isinstance(value, bool):
+        return list(range(7))
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return [max(0, min(int(value), 6))]
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"everyday", "every day", "daily", "all", "every"}:
+            return list(range(7))
+        if text in {"weekdays", "weekday"}:
+            return [0, 1, 2, 3, 4]
+        if text in {"weekends", "weekend"}:
+            return [5, 6]
+        value = [part.strip() for part in text.replace(";", ",").split(",") if part.strip()]
+    if not isinstance(value, list):
+        return list(range(7))
+    days: list[int] = []
+    for item in value:
+        if isinstance(item, (int, float)) and not isinstance(item, bool):
+            days.append(max(0, min(int(item), 6)))
+            continue
+        name = str(item).strip().lower()
+        if name.isdigit():
+            days.append(max(0, min(int(name), 6)))
+            continue
+        short = name[:3]
+        if short in WEEKDAYS:
+            days.append(WEEKDAYS.index(short))
+    return sorted(set(days)) if days else list(range(7))
+
+
+def hours_from_record(record: dict[str, Any]) -> list[int]:
+    hours = normalize_hours(record.get("daily_run_hours"))
+    if hours:
+        return hours
+    try:
+        hour = int(record.get("daily_run_hour") if record.get("daily_run_hour") is not None else DEFAULT_DAILY_HOUR)
+    except (TypeError, ValueError):
+        hour = DEFAULT_DAILY_HOUR
+    return [max(0, min(hour, 23))]
+
+
+def days_from_record(record: dict[str, Any]) -> list[int]:
+    return normalize_days(record.get("daily_run_days"))
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -86,10 +161,13 @@ def ensure_buyer(
         "brand_hashtags": [],
         "platforms": list(ONBOARD_PLATFORMS),
         "daily_run_hour": DEFAULT_DAILY_HOUR,
+        "daily_run_hours": [DEFAULT_DAILY_HOUR],
+        "daily_run_days": list(WEEKDAYS),
         "daily_run_timezone": DEFAULT_DAILY_TIMEZONE,
         "automation_enabled": False,
         "require_approval": True,
         "last_automation_date": "",
+        "last_automation_slot": "",
         "public_base_url": "",
         "last_run": None,
     }
@@ -112,7 +190,10 @@ def reset_instance(buyer_id: str) -> dict[str, Any]:
     record["platforms"] = list(ONBOARD_PLATFORMS)
     record["automation_enabled"] = False
     record["require_approval"] = False
+    record["daily_run_hours"] = [DEFAULT_DAILY_HOUR]
+    record["daily_run_days"] = list(WEEKDAYS)
     record["last_automation_date"] = ""
+    record["last_automation_slot"] = ""
     record["last_run"] = None
     return save_buyer(record)
 
@@ -194,11 +275,23 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
             record[key] = [str(tag) for tag in (value or []) if str(tag).strip()]
             continue
         if key == "daily_run_hour":
-            try:
-                hour = int(value)
-            except (TypeError, ValueError):
+            hours = normalize_hours(value)
+            if not hours:
                 continue
-            record[key] = max(0, min(hour, 23))
+            record["daily_run_hour"] = hours[0]
+            existing = normalize_hours(record.get("daily_run_hours"))
+            if not existing:
+                record["daily_run_hours"] = hours
+            continue
+        if key == "daily_run_hours":
+            hours = normalize_hours(value)
+            if not hours:
+                continue
+            record["daily_run_hours"] = hours
+            record["daily_run_hour"] = hours[0]
+            continue
+        if key == "daily_run_days":
+            record["daily_run_days"] = [WEEKDAYS[i] for i in normalize_days(value)]
             continue
         if key in {"automation_enabled", "require_approval"}:
             fallback = True if key == "require_approval" else False
@@ -216,6 +309,7 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
             "facebook_page_id",
             "google_location_id",
             "last_automation_date",
+            "last_automation_slot",
         }:
             record[key] = str(value).strip()
     return save_buyer(record)
@@ -239,11 +333,14 @@ def public_config(record: dict[str, Any]) -> dict[str, Any]:
         "brand_voice": record.get("brand_voice") or None,
         "brand_hashtags": record.get("brand_hashtags") or [],
         "platforms": record.get("platforms") or list(ONBOARD_PLATFORMS),
-        "daily_run_hour": record.get("daily_run_hour") or DEFAULT_DAILY_HOUR,
+        "daily_run_hour": hours_from_record(record)[0],
+        "daily_run_hours": hours_from_record(record),
+        "daily_run_days": [WEEKDAYS[i] for i in days_from_record(record)],
         "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
         "automation_enabled": bool(record.get("automation_enabled")),
         "require_approval": record.get("require_approval") is not False,
         "last_automation_date": record.get("last_automation_date") or None,
+        "last_automation_slot": record.get("last_automation_slot") or None,
         "pending_approval": bool((record.get("last_run") or {}).get("pending_approval")),
         "public_base_url": record.get("public_base_url") or None,
         "postproxy_profile_group_id": record.get("postproxy_profile_group_id") or None,

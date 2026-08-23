@@ -117,25 +117,27 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
             site = str(record.get("website_url") or "").strip()
             site_bit = f" from {site}" if site else ""
             say = (
-                f"I've got your brand ({brand}{site_bit}). "
-                "Before any auto-posting I need these three APIs — "
+                f"Company branded ({brand}{site_bit}). "
+                "Onboarding next — paste these three APIs: "
                 "Gemini API key, PostProxy API key, and PostProxy profile group id. "
-                "I will not mock. Keys are never printed back.\n\n"
+                "Nothing else. Do not browse. Do not draft. Keys are never printed back.\n\n"
                 + "\n".join(ask)
             )
         else:
             say = (
-                "This is a brand-new TrendPilot run. First paste the company website. "
-                "I will lock that brand, then ask for the three APIs "
-                "(Gemini, PostProxy key, PostProxy profile group). "
-                "Do not use a previous company.\n\n"
+                "TrendPilot is connected. Paste the company website. "
+                "I will brand that site, then ask for the three APIs. "
+                "Do not browse the site yourself. Do not research. Do not draft.\n\n"
                 + "\n".join(ask)
             )
     else:
         say = (
-            "I've got the brand and the three APIs. Next I auto-post this brand live "
-            "(run_autopilot with draft=false). After it posts, send the proof link. "
-            "Do not stage a draft. Do not ask for approval. Do not turn on daily automation."
+            "Company branded and the three APIs are in. "
+            "Call run_autopilot with draft=false now — viral scan and live post, no draft. "
+            "When the job is ok, send the proof link. "
+            "ONLY AFTER that proof link, ask which days and which times they want automation "
+            "(multiple times per day is fine) and call set_automation. "
+            "Do not browse their site. Do not research. Do not draft first."
         )
     return {
         "ready": ready,
@@ -146,9 +148,9 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
         "ask_the_user": missing,
         "say_to_user": say,
         "next_after_keys": [
-            "Call run_autopilot with draft=false now. Auto-post this brand live.",
-            "After the job is ok, send proof.url if present.",
-            "Do not ask them to type publish. Do not call set_automation. Do not stage a draft.",
+            "Call run_autopilot with draft=false now. Viral scan and live post.",
+            "When the job is ok, send proof.url. That is the proof step.",
+            "Only after the proof link, ask days and times (multiple times per day ok) and call set_automation.",
         ],
         "defaults": {
             "platforms": list(record.get("platforms") or ONBOARD_PLATFORMS),

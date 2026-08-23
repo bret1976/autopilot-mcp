@@ -9,7 +9,15 @@ from zoneinfo import ZoneInfo
 from app.config import DEFAULT_DAILY_HOUR, DEFAULT_DAILY_TIMEZONE
 from app.jobs import is_busy, spawn_job
 from app.onboard import readiness
-from app.store import iter_buyer_records, load_buyer, parse_bool, save_buyer
+from app.store import (
+    WEEKDAYS,
+    days_from_record,
+    hours_from_record,
+    iter_buyer_records,
+    load_buyer,
+    parse_bool,
+    save_buyer,
+)
 
 logger = logging.getLogger("automation")
 
@@ -42,20 +50,29 @@ def local_now(record: dict[str, Any], now: datetime | None = None) -> datetime:
     return now.astimezone(tz)
 
 
+def slot_id(when: datetime) -> str:
+    return f"{when.date().isoformat()}T{when.hour:02d}"
+
+
 def is_due(record: dict[str, Any], now: datetime | None = None) -> bool:
     if not automation_enabled(record):
         return False
     if not readiness(record).get("ready"):
         return False
     here = local_now(record, now)
-    try:
-        hour = int(record.get("daily_run_hour") if record.get("daily_run_hour") is not None else DEFAULT_DAILY_HOUR)
-    except (TypeError, ValueError):
-        hour = DEFAULT_DAILY_HOUR
-    hour = max(0, min(hour, 23))
-    if here.hour != hour:
+    if here.weekday() not in days_from_record(record):
+        return False
+    hours = hours_from_record(record)
+    if here.hour not in hours:
+        return False
+    slot = slot_id(here)
+    last_slot = str(record.get("last_automation_slot") or "")
+    if last_slot == slot:
         return False
     today = here.date().isoformat()
+    if last_slot:
+        return True
+    # Older licenses only stored a date. Treat that as already fired for today.
     return str(record.get("last_automation_date") or "") != today
 
 
@@ -64,7 +81,24 @@ def mark_fired(buyer_id: str, when: datetime) -> dict[str, Any]:
     if not record:
         raise KeyError(buyer_id)
     record["last_automation_date"] = when.date().isoformat()
+    record["last_automation_slot"] = slot_id(when)
     return save_buyer(record)
+
+
+def describe_schedule(record: dict[str, Any]) -> str:
+    hours = hours_from_record(record)
+    days = days_from_record(record)
+    tz = str(record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE)
+    times = " and ".join(f"{hour:02d}:00" for hour in hours)
+    if days == list(range(7)):
+        day_bit = "every day"
+    elif days == [0, 1, 2, 3, 4]:
+        day_bit = "weekdays"
+    elif days == [5, 6]:
+        day_bit = "weekends"
+    else:
+        day_bit = ", ".join(WEEKDAYS[i] for i in days)
+    return f"{day_bit} at {times} {tz}"
 
 
 def due_buyers(now: datetime | None = None) -> list[dict[str, Any]]:
@@ -75,21 +109,23 @@ def automation_public(record: dict[str, Any]) -> dict[str, Any]:
     here = local_now(record)
     enabled = automation_enabled(record)
     approval = require_approval(record)
-    hour = record.get("daily_run_hour")
-    try:
-        hour = int(hour if hour is not None else DEFAULT_DAILY_HOUR)
-    except (TypeError, ValueError):
-        hour = DEFAULT_DAILY_HOUR
+    hours = hours_from_record(record)
+    days = days_from_record(record)
     tz = str(record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE)
     pending = bool((record.get("last_run") or {}).get("pending_approval"))
+    schedule = describe_schedule(record)
     return {
         "automation_enabled": enabled,
         "require_approval": approval,
-        "daily_run_hour": max(0, min(hour, 23)),
+        "daily_run_hour": hours[0],
+        "daily_run_hours": hours,
+        "daily_run_days": [WEEKDAYS[i] for i in days],
         "daily_run_timezone": tz,
         "last_automation_date": record.get("last_automation_date") or None,
+        "last_automation_slot": record.get("last_automation_slot") or None,
         "pending_approval": pending,
-        "next_local": f"{hour:02d}:00 {tz}",
+        "next_local": schedule,
+        "schedule": schedule,
         "mode": (
             "off"
             if not enabled

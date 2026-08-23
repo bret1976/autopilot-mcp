@@ -54,6 +54,29 @@ def test_parse_bool() -> None:
     assert parse_bool(None, True) is True
 
 
+def test_due_respects_days_and_multiple_hours() -> None:
+    record = _ready("auto-slots")
+    update_setup(
+        "auto-slots",
+        {
+            "automation_enabled": True,
+            "require_approval": False,
+            "daily_run_hours": [8, 17],
+            "daily_run_days": "weekdays",
+        },
+    )
+    friday_eight = datetime(2026, 8, 21, 8, 5, tzinfo=PT)
+    friday_five = datetime(2026, 8, 21, 17, 5, tzinfo=PT)
+    saturday_eight = datetime(2026, 8, 22, 8, 5, tzinfo=PT)
+    ready = ensure_buyer("auto-slots")
+    assert is_due(ready, friday_eight) is True
+    mark_fired("auto-slots", friday_eight)
+    after_eight = ensure_buyer("auto-slots")
+    assert is_due(after_eight, friday_eight) is False
+    assert is_due(after_eight, friday_five) is True
+    assert is_due(after_eight, saturday_eight) is False
+
+
 def test_due_only_when_enabled_ready_and_hour() -> None:
     record = _ready("auto-due")
     eight = datetime(2026, 8, 21, 8, 5, tzinfo=PT)
@@ -103,6 +126,17 @@ async def test_set_automation_saves_mode() -> None:
     assert report["automation"]["require_approval"] is False
     assert report["automation"]["mode"] == "scan_and_post"
     assert "no approval" in report["message"].lower() or "no click" in report["say_to_user"].lower()
+
+    multi = await set_automation(
+        enabled=True,
+        daily_run_hours=[8, 17],
+        daily_run_days="weekdays",
+        daily_run_timezone="America/Los_Angeles",
+    )
+    assert multi["automation"]["daily_run_hours"] == [8, 17]
+    assert multi["automation"]["daily_run_days"] == ["mon", "tue", "wed", "thu", "fri"]
+    assert "08:00" in multi["say_to_user"]
+    assert "17:00" in multi["say_to_user"]
 
     gated = await set_automation(enabled=True, require_approval=True)
     assert gated["automation"]["mode"] == "approve_then_post"
@@ -170,13 +204,16 @@ async def test_automation_tools_registered() -> None:
     assert {"set_automation", "approve_and_publish", "run_autopilot"}.issubset(names)
 
 
-def test_ready_copy_tells_host_to_autopost_live() -> None:
+def test_ready_copy_tells_host_to_autopost_then_ask_times() -> None:
     record = _ready("auto-copy")
     report = readiness(record)
-    assert "run_autopilot" in report["say_to_user"]
-    assert "draft=false" in report["say_to_user"]
-    assert "set_automation" not in report["say_to_user"]
-    assert "require_approval" not in report["say_to_user"]
+    say = report["say_to_user"]
+    assert "run_autopilot" in say
+    assert "draft=false" in say
+    assert "proof" in say.lower()
+    assert "set_automation" in say
+    assert say.index("run_autopilot") < say.index("set_automation")
+    assert "ONLY AFTER" in say
     assert "draft=true" not in " ".join(report["next_after_keys"])
     pub = automation_public(record)
     assert pub["mode"] == "off"

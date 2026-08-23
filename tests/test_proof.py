@@ -104,7 +104,7 @@ async def test_dashboard_only_after_every_social_confirms(monkeypatch) -> None:
     assert built and built["ok"] is True
     assert built["all_confirmed"] is True
     assert built["url"].startswith("http://testserver/proof/")
-    assert "screenshots" in built["say_to_user"]
+    assert built["url"] in built["say_to_user"]
     html = render_proof_html(
         {
             "brand_name": "Cory Connects",
@@ -124,6 +124,40 @@ async def test_dashboard_only_after_every_social_confirms(monkeypatch) -> None:
     assert "Open live" in page.text
     shot = client.get(f"/proof/{proof_id}/linkedin.jpg")
     assert shot.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_processing_permalink_still_gets_a_proof_link(monkeypatch) -> None:
+    record = ensure_buyer("proof-processing")
+    record["postproxy_api_key"] = "pp-test"
+    record = save_buyer(record)
+    published = {
+        "posts": [
+            {
+                "ok": True,
+                "platform": "instagram",
+                "account": "Cory Connects",
+                "result": {
+                    "id": "post_ig",
+                    "platforms": [{"platform": "instagram", "status": "processing", "permalink": None}],
+                },
+            }
+        ]
+    }
+
+    async def fake_get(api_key, post_id):
+        return published["posts"][0]["result"]
+
+    async def fake_capture(*, platform, permalink, dest, poster=None):
+        Path(dest).write_bytes(b"\xff\xd8\xff" + b"shot" * 2000)
+        return {"ok": True, "path": Path(dest).name, "source": "receipt", "permalink": permalink}
+
+    monkeypatch.setattr(postproxy, "get_post", fake_get)
+    built = await build_proof_dashboard(
+        record, published, copy={"title": "Cut"}, draft=False, capture=fake_capture
+    )
+    assert built and built["ok"] is True
+    assert built["url"]
 
 
 @pytest.mark.asyncio
@@ -177,4 +211,4 @@ async def test_publish_cut_attaches_proof_when_live(monkeypatch) -> None:
     assert result["posts"][0]["ok"] is True
     assert result["proof"]["ok"] is True
     assert result["proof"]["url"]
-    assert "Proof dashboard" in result["proof"]["say_to_user"]
+    assert result["proof"]["url"] in result["proof"]["say_to_user"]

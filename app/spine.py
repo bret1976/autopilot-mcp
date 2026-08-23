@@ -224,9 +224,12 @@ async def publish_cut(
                 )
             )
     result = {"mocked": False, "batches": batches, "posts": posts}
-    if not draft:
-        proof = await build_proof_dashboard(record, result, copy=copy, media=media, draft=False)
-        if proof:
+    if not draft and posts and all(item.get("ok") for item in posts):
+        try:
+            proof = await build_proof_dashboard(record, result, copy=copy, media=media, draft=False)
+        except Exception:  # noqa: BLE001 — proof must never change the post result
+            proof = None
+        if proof and proof.get("url"):
             result["proof"] = proof
     return result
 

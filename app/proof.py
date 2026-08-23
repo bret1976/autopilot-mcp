@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 import secrets
@@ -70,33 +69,11 @@ def _looks_like_login(html: str) -> bool:
     return any(marker in text for marker in _LOGIN_MARKERS) and len(text) < 80_000
 
 
-async def wait_for_live_post(api_key: str, post_id: str, *, tries: int = 6) -> dict[str, Any]:
-    last: dict[str, Any] = {}
-    for attempt in range(tries):
-        payload = await postproxy.get_post(api_key, post_id)
-        if not isinstance(payload, dict):
-            return last
-        last = payload
-        rows = postproxy.platform_outcomes(payload)
-        if not rows:
-            return last
-        statuses = {str(row.get("status") or "").lower() for row in rows}
-        if "failed" in statuses or "error" in statuses:
-            return last
-        if rows and all(
-            str(row.get("status") or "").lower() == "published" and permalink_from(row)
-            for row in rows
-        ):
-            return last
-        if attempt + 1 < tries:
-            await asyncio.sleep(2)
-    return last
-
-
 async def confirm_published_posts(
     api_key: str,
     posts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """Enrich permalinks only. A PostProxy ok stays ok — do not re-judge the post."""
     confirmed: list[dict[str, Any]] = []
     for item in posts:
         row = dict(item)
@@ -105,21 +82,19 @@ async def confirm_published_posts(
         live = raw
         if api_key and post_id:
             try:
-                live = await wait_for_live_post(api_key, post_id)
+                fetched = await postproxy.get_post(api_key, post_id)
+                if isinstance(fetched, dict):
+                    live = fetched
             except postproxy.PostProxyError:
                 live = raw
         outcomes = postproxy.platform_outcomes(live) or postproxy.platform_outcomes(raw)
-        permalink = ""
-        status = "published" if row.get("ok") else "failed"
+        permalink = permalink_from(raw) or permalink_from(row)
         for outcome in outcomes:
             permalink = permalink or permalink_from(outcome)
-            if str(outcome.get("status") or "").strip():
-                status = str(outcome.get("status") or status)
-        permalink = permalink or permalink_from(raw) or permalink_from(row)
         row["post_id"] = post_id
         row["permalink"] = permalink
-        row["live_status"] = status
-        row["confirmed"] = bool(row.get("ok")) and status.lower() in {"published", "processed", "ok"}
+        row["live_status"] = "published" if row.get("ok") else "failed"
+        row["confirmed"] = bool(row.get("ok"))
         confirmed.append(row)
     return confirmed
 
@@ -336,13 +311,8 @@ async def build_proof_dashboard(
         return None
     key = str(record.get("postproxy_api_key") or "")
     confirmed = await confirm_published_posts(key, posts)
-    if not confirmed or not all(item.get("confirmed") for item in confirmed):
-        return {
-            "ok": False,
-            "all_confirmed": False,
-            "posts": confirmed,
-            "say_to_user": "Not every social is confirmed live yet, so there is no proof link.",
-        }
+    if not confirmed:
+        return None
     proof_id = secrets.token_urlsafe(12)
     folder = proof_dir(proof_id)
     poster = _poster_path(media)
@@ -388,10 +358,7 @@ async def build_proof_dashboard(
         "id": proof_id,
         "url": url,
         "platforms": platforms,
-        "say_to_user": (
-            f"All {len(platforms)} socials are confirmed live ({names}). "
-            f"Proof dashboard with screenshots: {url}"
-        ),
+        "say_to_user": f"Proof of the posts: {url}",
     }
 
 

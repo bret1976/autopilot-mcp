@@ -131,6 +131,43 @@ async def initialize_connection(
     )
 
 
+async def get_post(api_key: str, post_id: str) -> Any:
+    post_id = str(post_id or "").strip()
+    if not post_id:
+        raise PostProxyError("Post id is required.")
+    return await _request("GET", f"/api/posts/{post_id}", api_key)
+
+
+def result_post_id(payload: Any) -> str:
+    if isinstance(payload, dict):
+        for key in ("id", "post_id"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                return value
+        nested = payload.get("data")
+        if isinstance(nested, dict):
+            return result_post_id(nested)
+    return ""
+
+
+def platform_outcomes(payload: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if not isinstance(payload, dict):
+        return rows
+    for key in ("platforms", "results", "items"):
+        found = payload.get(key)
+        if isinstance(found, list):
+            rows.extend(row for row in found if isinstance(row, dict))
+    nested = payload.get("data")
+    if isinstance(nested, dict):
+        rows.extend(platform_outcomes(nested))
+    elif isinstance(nested, list):
+        rows.extend(row for row in nested if isinstance(row, dict) and row.get("platform"))
+    return rows
+
+
 async def create_post(
     api_key: str,
     *,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from app.mcp_server import bind_buyer, buyer_from_request, mcp
 from app.media import buyer_media_dir, verify_media
 from app.oauth import router as oauth_router, www_authenticate
 from app.orders import fulfill_order
+from app.proof import load_proof, proof_dir, render_proof_html
 from app.store import ensure_buyer, list_buyers, list_leads
 from app.tokens import clean_buyer_id, mint_token
 
@@ -294,6 +296,27 @@ async def admin_mint(
             },
         ),
     )
+
+
+@app.get("/proof/{proof_id}", response_class=HTMLResponse)
+async def proof_dashboard(proof_id: str):
+    manifest = load_proof(proof_id)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="Proof dashboard not found")
+    return HTMLResponse(render_proof_html(manifest))
+
+
+@app.get("/proof/{proof_id}/{filename}")
+async def proof_shot(proof_id: str, filename: str):
+    if not load_proof(proof_id):
+        raise HTTPException(status_code=404, detail="Proof dashboard not found")
+    name = Path(filename).name
+    if not re.match(r"^[A-Za-z0-9._-]+\.(jpg|jpeg|png|webp|gif)$", name, re.I):
+        raise HTTPException(status_code=404, detail="shot not found")
+    path = proof_dir(proof_id) / name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="shot not found")
+    return FileResponse(path)
 
 
 @app.get("/connected", response_class=HTMLResponse)

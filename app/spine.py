@@ -17,6 +17,7 @@ from app.hashtags import apply_hashtags, topic_tags
 from app.media import MediaError, download_and_cut
 from app.platforms import normalize_platform, split_batches, youtube_title
 from app import postproxy
+from app.proof import build_proof_dashboard
 from app.store import public_config, set_last_run, update_setup
 
 SCAN_PROMPT = """You are scanning live public web results for one ORIGINAL clip this brand can cut today.
@@ -222,7 +223,12 @@ async def publish_cut(
                     draft=draft,
                 )
             )
-    return {"mocked": False, "batches": batches, "posts": posts}
+    result = {"mocked": False, "batches": batches, "posts": posts}
+    if not draft:
+        proof = await build_proof_dashboard(record, result, copy=copy, media=media, draft=False)
+        if proof:
+            result["proof"] = proof
+    return result
 
 
 async def _publish_one(

@@ -13,6 +13,7 @@ from app import postproxy
 from app.jobs import is_busy, load_job, spawn_job
 from app.media import MediaError, download_and_cut
 from app.onboard import blocked, fetch_brand_from_website, readiness
+from app.proof import proof_from_last_run
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
 from app.store import (
     apply_owner_studio_brand,
@@ -66,6 +67,9 @@ mcp = FastMCP(
         "Google Business gets a still frame, not the video. "
         "If X returns Twitter API Forbidden, open the reconnect URL and finish OAuth. "
         "If you already have a source_url, call run_autopilot with that URL only. "
+        "After a LIVE publish (draft=false) where every social is confirmed, "
+        "send the buyer proof.url — a dashboard of screenshots proving each post is live. "
+        "Do not only say posted. Give them that link. If proof is missing, call proof_link. "
         "scan_trends, download_original, write_copy, publish, and run_autopilot "
         "return immediately with started=true. Poll status until job.status is ok or error."
     ),
@@ -573,6 +577,22 @@ async def status() -> dict[str, Any]:
     payload["busy"] = is_busy(record["buyer_id"])
     payload["defaults"]["platforms"] = list(record.get("platforms") or ONBOARD_PLATFORMS)
     return payload
+
+
+@mcp.tool
+async def proof_link() -> dict[str, Any]:
+    """Return the screenshot proof dashboard for the last confirmed live publish."""
+    record = current_record()
+    built = await proof_from_last_run(record)
+    if built.get("ok") and built.get("url"):
+        last = dict(record.get("last_run") or {})
+        last["proof"] = {k: v for k, v in built.items() if k != "posts"}
+        record["last_run"] = last
+        save_buyer(record)
+        built["say_to_user"] = (
+            f"All confirmed socials are on this proof dashboard: {built['url']}"
+        )
+    return built
 
 
 @mcp.tool

@@ -162,4 +162,5 @@ async def test_onboard_is_registered() -> None:
         "run_autopilot",
         "set_automation",
         "approve_and_publish",
+        "proof_link",
     }.issubset(names)

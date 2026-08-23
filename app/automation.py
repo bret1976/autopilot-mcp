@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.config import DEFAULT_DAILY_HOUR, DEFAULT_DAILY_TIMEZONE
+from app.config import DEFAULT_DAILY_TIMEZONE
 from app.jobs import is_busy, spawn_job
 from app.onboard import readiness
 from app.store import (

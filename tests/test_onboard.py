@@ -31,13 +31,8 @@ async def test_onboard_and_run_ask_for_buyer_keys() -> None:
     report = await onboard()
     assert report["needs_setup"] is True
     assert report["ready"] is False
-    assert "gemini_api_key" in report["missing"]
-    assert "postproxy_api_key" in report["missing"]
-    assert "website_url" in report["missing"]
-    assert report["missing"][0] == "website_url"
-    assert "Gemini API key" in report["say_to_user"]
-    assert "PostProxy" in report["say_to_user"]
-    assert "three APIs" in report["say_to_user"]
+    assert report["missing"] == ["website_url"]
+    assert "website" in report["say_to_user"].lower()
 
     refused = await run_autopilot_tool()
     assert refused["ok"] is False
@@ -90,8 +85,80 @@ async def test_brand_then_asks_for_three_apis() -> None:
         "postproxy_api_key",
         "postproxy_profile_group_id",
     ]
-    assert "Brand is set" in after_brand["say_to_user"]
+    assert "I've got your brand" in after_brand["say_to_user"]
     assert "three APIs" in after_brand["say_to_user"]
+
+    after_keys = await setup(
+        gemini_api_key="test-gemini-not-real",
+        postproxy_api_key="test-postproxy-not-real",
+        postproxy_profile_group_id="grp_test",
+    )
+    assert after_keys["ready"] is True
+    assert "auto-post" in after_keys["say_to_user"].lower() or "draft=false" in after_keys["say_to_user"]
+    assert "set_automation" not in after_keys["say_to_user"]
+    assert "draft=true" not in " ".join(after_keys["next_after_keys"])
+
+
+@pytest.mark.asyncio
+async def test_onboard_wipes_leftover_company_every_time() -> None:
+    bind_buyer("bret-jenny")
+    record = ensure_buyer("bret-jenny")
+    record.update(
+        {
+            "brand_name": "Secured Quantum Services",
+            "brand_voice": "SQS leftover voice",
+            "website_url": "https://securedquantum.example",
+            "gemini_api_key": "old-gemini",
+            "postproxy_api_key": "old-pp",
+            "postproxy_profile_group_id": "old-group",
+            "last_run": {"id": "old-run", "posts": [{"account": "6Frame Studios"}]},
+            "automation_enabled": True,
+            "require_approval": True,
+            "daily_run_hour": 8,
+        }
+    )
+    save_buyer(record)
+
+    result = await onboard()
+
+    assert result["ready"] is False
+    assert result["needs_setup"] is True
+    assert result["missing"] == ["website_url"]
+    assert "website" in result["say_to_user"].lower()
+    assert "Secured Quantum" not in result["say_to_user"]
+    assert "TrendPilot" in result["say_to_user"]
+    wiped = load_buyer("bret-jenny") or {}
+    assert wiped.get("brand_name") == ""
+    assert wiped.get("gemini_api_key") == ""
+    assert wiped.get("last_run") is None
+    assert wiped.get("automation_enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_new_website_resets_previous_company_keys() -> None:
+    bind_buyer("switch-brand")
+    ensure_buyer("switch-brand")
+    await setup(
+        gemini_api_key="old-gemini",
+        postproxy_api_key="old-pp",
+        postproxy_profile_group_id="old-group",
+        brand_name="Cory Connects",
+        website_url="https://coryconnects.example",
+        brand_voice="Write as Cory Connects.",
+    )
+    switched = await setup(
+        brand_name="North Light",
+        website_url="https://northlight.example",
+        brand_voice="Write as North Light.",
+    )
+    assert switched["ready"] is False
+    assert switched["config"]["brand_name"] == "North Light"
+    assert switched["missing"] == [
+        "gemini_api_key",
+        "postproxy_api_key",
+        "postproxy_profile_group_id",
+    ]
+    assert "I've got your brand" in switched["say_to_user"]
 
 
 def test_readiness_and_hashtag_from_name() -> None:
@@ -100,14 +167,14 @@ def test_readiness_and_hashtag_from_name() -> None:
     assert hashtags_from_name("North Light") == ["#NorthLight"]
 
 
-def test_owner_license_resets_ian_to_six_frame() -> None:
+def test_owner_license_clears_ian_leftover() -> None:
     record = ensure_buyer("bret-jenny")
     record["brand_name"] = "IAN Group"
     record["website_url"] = "https://iangroup.ai/"
     record = save_buyer(record)
     restored = apply_owner_studio_brand(record)
-    assert restored["brand_name"] == "6Frame Studio"
-    assert restored["website_url"] == "https://6framestudio.com"
+    assert restored["brand_name"] == ""
+    assert restored["website_url"] == ""
 
 
 def test_owner_keeps_pasted_website_as_brand() -> None:

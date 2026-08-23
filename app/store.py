@@ -7,14 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from app.config import (
-    DEFAULT_BRAND_VOICE,
     DEFAULT_DAILY_HOUR,
     DEFAULT_DAILY_TIMEZONE,
-    LOCKED_HASHTAGS,
     ONBOARD_PLATFORMS,
     OWNER_BUYER_ID,
     STUDIO_NAME,
-    STUDIO_WEBSITE,
     data_dir,
 )
 from app.onboard import brand_name_from_host, hashtags_from_name, is_studio_voice, is_studio_website
@@ -100,8 +97,33 @@ def ensure_buyer(
     return apply_owner_studio_brand(record)
 
 
+def reset_instance(buyer_id: str) -> dict[str, Any]:
+    """Brand-new run on the same license. Drops leftover companies, keys, drafts, and daily jobs."""
+    record = load_buyer(buyer_id) or ensure_buyer(buyer_id)
+    record["gemini_api_key"] = ""
+    record["postproxy_api_key"] = ""
+    record["postproxy_profile_group_id"] = ""
+    record["facebook_page_id"] = ""
+    record["google_location_id"] = ""
+    record["brand_name"] = ""
+    record["website_url"] = ""
+    record["brand_voice"] = ""
+    record["brand_hashtags"] = []
+    record["platforms"] = list(ONBOARD_PLATFORMS)
+    record["automation_enabled"] = False
+    record["require_approval"] = False
+    record["last_automation_date"] = ""
+    record["last_run"] = None
+    return save_buyer(record)
+
+
+def should_start_new_instance(record: dict[str, Any]) -> bool:
+    """True when this license still has a previous company's draft or daily job."""
+    return bool(record.get("last_run") or record.get("automation_enabled"))
+
+
 def apply_owner_studio_brand(record: dict[str, Any]) -> dict[str, Any]:
-    """Owner starts as 6Frame. A pasted website is the brand of record — never restore 6Frame over it."""
+    """Never keep IAN. Never invent 6Frame over an empty or pasted-website license."""
     if str(record.get("buyer_id") or "") != OWNER_BUYER_ID:
         return record
     name = str(record.get("brand_name") or "").strip()
@@ -109,10 +131,10 @@ def apply_owner_studio_brand(record: dict[str, Any]) -> dict[str, Any]:
     website_l = website.lower()
     is_ian = "iangroup" in website_l or name.upper().replace(" ", "").startswith("IAN")
     if is_ian:
-        record["brand_name"] = STUDIO_NAME
-        record["website_url"] = STUDIO_WEBSITE
-        record["brand_voice"] = DEFAULT_BRAND_VOICE
-        record["brand_hashtags"] = list(LOCKED_HASHTAGS)
+        record["brand_name"] = ""
+        record["website_url"] = ""
+        record["brand_voice"] = ""
+        record["brand_hashtags"] = []
         return save_buyer(record)
     if website and not is_studio_website(website):
         changed = False
@@ -132,15 +154,7 @@ def apply_owner_studio_brand(record: dict[str, Any]) -> dict[str, Any]:
             record["brand_hashtags"] = hashtags_from_name(str(record.get("brand_name") or ""))
             changed = True
         return save_buyer(record) if changed else record
-    if name and website and name != STUDIO_NAME:
-        return record
-    if name or website:
-        return record
-    record["brand_name"] = STUDIO_NAME
-    record["website_url"] = STUDIO_WEBSITE
-    record["brand_voice"] = str(record.get("brand_voice") or "").strip() or DEFAULT_BRAND_VOICE
-    record["brand_hashtags"] = list(record.get("brand_hashtags") or LOCKED_HASHTAGS)
-    return save_buyer(record)
+    return record
 
 
 def clear_buyer_api_keys(buyer_id: str) -> dict[str, Any]:

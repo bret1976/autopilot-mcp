@@ -13,7 +13,6 @@ from app.config import (
     DEFAULT_DAILY_TIMEZONE,
     ONBOARD_PLATFORMS,
     STUDIO_NAME,
-    STUDIO_WEBSITE,
 )
 from app.hashtags import normalize_tag
 
@@ -90,22 +89,15 @@ def _api_prompts() -> list[dict[str, str]]:
 
 
 def missing_fields(record: dict[str, Any]) -> list[dict[str, str]]:
-    missing: list[dict[str, str]] = []
     if not _has_brand(record):
-        missing.append(
+        return [
             {
                 "id": "website_url",
-                "prompt": (
-                    "Paste the company website. That site becomes the brand of record "
-                    f"(name + voice). {STUDIO_NAME} is only a placeholder until then."
-                ),
-                "why": "Copy must match the website they entered, not the initial studio brand.",
+                "prompt": "Paste the company website. This run is brand-new — that site is the brand.",
+                "why": "TrendPilot learns this company from the website before any APIs or posts.",
             }
-        )
-    for item in _api_prompts():
-        if not str(record.get(item["id"]) or "").strip():
-            missing.append(item)
-    return missing
+        ]
+    return [item for item in _api_prompts() if not str(record.get(item["id"]) or "").strip()]
 
 
 def readiness(record: dict[str, Any]) -> dict[str, Any]:
@@ -125,31 +117,25 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
             site = str(record.get("website_url") or "").strip()
             site_bit = f" from {site}" if site else ""
             say = (
-                f"Brand is set ({brand}{site_bit}). That website is the brand of record — "
-                "do not restore 6Frame Studio. Next step: paste your three APIs — "
+                f"I've got your brand ({brand}{site_bit}). "
+                "Before any auto-posting I need these three APIs — "
                 "Gemini API key, PostProxy API key, and PostProxy profile group id. "
                 "I will not mock. Keys are never printed back.\n\n"
                 + "\n".join(ask)
             )
         else:
             say = (
-                "TrendPilot / Autopilot is connected, but it is not ready to scan or post. "
-                "First the brand/website, then your three APIs "
-                "(Gemini, PostProxy key, PostProxy profile group).\n\n"
+                "This is a brand-new TrendPilot run. First paste the company website. "
+                "I will lock that brand, then ask for the three APIs "
+                "(Gemini, PostProxy key, PostProxy profile group). "
+                "Do not use a previous company.\n\n"
                 + "\n".join(ask)
-                + "\n\nPaste those here. I will save them with setup (keys are never printed back), "
-                "then send OAuth links so you can connect each network on your PostProxy account. "
-                f"Default platforms: {', '.join(ONBOARD_PLATFORMS)}. "
-                f"Daily automation is off until they turn it on. Default time is "
-                f"{DEFAULT_DAILY_HOUR:02d}:00 {DEFAULT_DAILY_TIMEZONE} (8:00 AM PT)."
             )
     else:
         say = (
-            "Keys and brand are in. Next I will send PostProxy OAuth links for each platform "
-            "you want live. After you finish those, they can say Run Autopilot for a one-off, "
-            "or call set_automation to turn on a daily scan → download → post. "
-            "Ask whether they want require_approval=true (stage a draft, then approve_and_publish) "
-            "or require_approval=false (auto-post, no click)."
+            "I've got the brand and the three APIs. Next I auto-post this brand live "
+            "(run_autopilot with draft=false). After it posts, send the proof link. "
+            "Do not stage a draft. Do not ask for approval. Do not turn on daily automation."
         )
     return {
         "ready": ready,
@@ -160,17 +146,16 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
         "ask_the_user": missing,
         "say_to_user": say,
         "next_after_keys": [
-            "Call postproxy_connect for linkedin, twitter, instagram, youtube, facebook.",
-            "Open each returned URL and finish OAuth on the buyer's own accounts.",
-            "Call run_autopilot with draft=true for the first live cut.",
-            "Ask if they want daily automation. Then call set_automation.",
+            "Call run_autopilot with draft=false now. Auto-post this brand live.",
+            "After the job is ok, send proof.url if present.",
+            "Do not ask them to type publish. Do not call set_automation. Do not stage a draft.",
         ],
         "defaults": {
             "platforms": list(record.get("platforms") or ONBOARD_PLATFORMS),
             "daily_run_hour": record.get("daily_run_hour") or DEFAULT_DAILY_HOUR,
             "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
             "automation_enabled": False,
-            "require_approval": True,
+            "require_approval": False,
         },
     }
 

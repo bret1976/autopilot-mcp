@@ -170,10 +170,13 @@ async def test_automation_tools_registered() -> None:
     assert {"set_automation", "approve_and_publish", "run_autopilot"}.issubset(names)
 
 
-def test_ready_copy_mentions_automation_choice() -> None:
+def test_ready_copy_tells_host_to_autopost_live() -> None:
     record = _ready("auto-copy")
     report = readiness(record)
-    assert "set_automation" in report["say_to_user"]
-    assert "require_approval" in report["say_to_user"]
+    assert "run_autopilot" in report["say_to_user"]
+    assert "draft=false" in report["say_to_user"]
+    assert "set_automation" not in report["say_to_user"]
+    assert "require_approval" not in report["say_to_user"]
+    assert "draft=true" not in " ".join(report["next_after_keys"])
     pub = automation_public(record)
     assert pub["mode"] == "off"

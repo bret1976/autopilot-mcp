@@ -112,7 +112,8 @@ def test_host_handshakes_and_fast_tools() -> None:
         )
         payload = _json(onboard)["result"]["structuredContent"]
         assert payload["needs_setup"] is True
-        assert "gemini_api_key" in payload["missing"]
+        assert payload["missing"] == ["website_url"]
+        assert "gemini_api_key" not in payload["missing"]
 
         status = client.post(
             f"/mcp/t/{token}",

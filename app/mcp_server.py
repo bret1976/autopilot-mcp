@@ -12,7 +12,7 @@ from app.config import ONBOARD_PLATFORMS, public_base_url
 from app import postproxy
 from app.jobs import is_busy, load_job, spawn_job
 from app.media import MediaError, download_and_cut
-from app.onboard import blocked, fetch_brand_from_website, readiness
+from app.onboard import blocked, fetch_brand_from_website, normalize_website, readiness
 from app.proof import proof_from_last_run
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
 from app.store import (
@@ -21,7 +21,9 @@ from app.store import (
     ensure_buyer,
     load_buyer,
     public_config,
+    reset_instance,
     save_buyer,
+    should_start_new_instance,
     update_setup,
 )
 from app.tokens import extract_token, verify_token
@@ -36,40 +38,23 @@ mcp = FastMCP(
         "Antigravity, ChatGPT, or another MCP host. The spine is locked: "
         "scan a viral original → download/trim under 60s → write THEIR brand copy → "
         "PostProxy to their socials. "
-        "FIRST tool on every new chat: call onboard. "
-        "If onboard.needs_setup is true, ASK the user every item in ask_the_user "
-        "and read say_to_user almost verbatim. Do not scan, write, download, or publish "
-        "until onboard.ready is true. "
-        "Never invent API keys. Never use a shared Gemini or PostProxy key. "
-        "Never enable mock mode. Never dump 6Frame stub clips. "
-        "6Frame Studio is only the placeholder until they paste a company website. "
-        "The website they enter IS the brand of record — name, voice, and copy. "
-        "Call set_brand_from_website (or setup with website_url) and keep that brand. "
-        "Do not restore 6Frame after a website is set. Do not prefer the initial studio voice. "
-        "If scrape looks thin, call set_brand_from_website again — never fall back to 6Frame. "
-        "THEN ask for the three APIs: Gemini API key, PostProxy API key, PostProxy profile group id. "
-        "Do not skip the API step after brand is set. They paste their own keys in the host. "
-        "Those can be the 6Frame keys; posts go to the user's socials. "
-        "Scan and write as the website's brand. Do not invent another brand. "
-        "Default platforms: LinkedIn, X, Instagram, YouTube, Facebook. "
-        "The paste-a-URL license does not change. After keys are wired, offer set_automation. "
-        "Daily automation is off until they enable it. They choose require_approval=true "
-        "(scan + download, then wait for approve_and_publish) or require_approval=false "
-        "(scan + download + post with no click). Default time is 8:00 AM PT. "
-        "First live one-off uses draft=true so they can check the cut. "
-        "If download fails with source_bot_check, that is YouTube/TikTok blocking "
-        "the SOURCE clip fetch — not the buyer's connected YouTube channel. "
-        "Do not tell them publishing is blocked. Call run_autopilot again without "
-        "source_url so we pick another original. "
+        "You are TrendPilot. Every new chat is a brand-new company on this same license. "
+        "FIRST tool: call onboard once. It always wipes leftover brands, keys, drafts, "
+        "and daily jobs (Cory Connects, Secured Quantum Services, 6Frame, IAN, anything else). "
+        "Do not call status or last_run before onboard — those show the previous company. "
+        "Order, every time, no exceptions: "
+        "1) Name yourself TrendPilot and ask for THIS company's website. "
+        "2) Call set_brand_from_website or setup(website_url=...). Then say you've got their brand. "
+        "3) Ask for the three APIs every time: Gemini key, PostProxy key, PostProxy profile group id. "
+        "4) After setup saves those keys, immediately call run_autopilot with draft=false and auto-post. "
+        "5) If proof.url is returned, send that one link. That is the only extra. "
+        "Do not mention or restore a previous company. Do not skip the API step. "
+        "Do not stage a draft. Do not ask them to type publish. Do not turn on daily automation. "
+        "Never invent API keys. Never mock. Never dump 6Frame stub clips. "
+        "If onboard.needs_setup is true, read say_to_user and ask ask_the_user verbatim. "
+        "Do not scan or post until onboard.ready is true. "
+        "If download fails with source_bot_check, call run_autopilot again without source_url. "
         "Never call scan_trends and run_autopilot in the same turn. "
-        "Facebook needs a Page page_id and Google Business needs a location_id — "
-        "TrendPilot now reads those from PostProxy placements and pins them. "
-        "Google Business gets a still frame, not the video. "
-        "If X returns Twitter API Forbidden, open the reconnect URL and finish OAuth. "
-        "If you already have a source_url, call run_autopilot with that URL only. "
-        "After a live publish succeeds the same way it already does, if proof.url is present, "
-        "send that one link so they can see the posts. Do not change setup, APIs, brand, "
-        "or the post flow. Do not turn daily automation on unless they ask. "
         "scan_trends, download_original, write_copy, publish, and run_autopilot "
         "return immediately with started=true. Poll status until job.status is ok or error."
     ),
@@ -126,10 +111,13 @@ def _onboard_payload(record: dict[str, Any]) -> dict[str, Any]:
 async def onboard() -> dict[str, Any]:
     """FIRST call when the user says TrendPilot, Autopilot, or autoposting.
 
-    Returns the exact questions to ask (Gemini key, PostProxy key, profile group,
-    brand + website) before any scan or post. Never skip this.
+    Starts a brand-new company run. Leftover brands, drafts, and daily jobs are dropped.
+    Then ask for the website, then the three APIs, then auto-post.
     """
-    return _onboard_payload(current_record())
+    buyer_id = current_buyer_id()
+    ensure_buyer(buyer_id)
+    record = reset_instance(buyer_id)
+    return _onboard_payload(record)
 
 
 @mcp.tool
@@ -167,6 +155,11 @@ async def setup(
     record = current_record()
     if reset_api_keys:
         record = clear_buyer_api_keys(record["buyer_id"])
+    if website_url:
+        incoming = normalize_website(website_url)
+        previous = normalize_website(str(record.get("website_url") or ""))
+        if incoming and previous and incoming.rstrip("/") != previous.rstrip("/"):
+            record = reset_instance(record["buyer_id"])
     fields: dict[str, Any] = {
         "gemini_api_key": gemini_api_key,
         "postproxy_api_key": postproxy_api_key,
@@ -253,11 +246,18 @@ async def configure(
 @mcp.tool
 async def set_brand_from_website(website_url: str, brand_name: str | None = None) -> dict[str, Any]:
     """Set the brand from the website they pasted. That site is the brand of record."""
+    record = current_record()
+    incoming = normalize_website(website_url)
+    previous = normalize_website(str(record.get("website_url") or ""))
+    if should_start_new_instance(record) or (
+        incoming and previous and incoming.rstrip("/") != previous.rstrip("/")
+    ):
+        record = reset_instance(record["buyer_id"])
     fetched = await fetch_brand_from_website(website_url)
     if not fetched.get("ok"):
         return fetched
     saved = update_setup(
-        current_record()["buyer_id"],
+        record["buyer_id"],
         {
             "website_url": fetched.get("website_url"),
             "brand_name": brand_name or fetched.get("brand_name"),
@@ -409,7 +409,7 @@ async def publish(
     topic_tags: list[str] | None = None,
     draft: bool = True,
 ) -> dict[str, Any]:
-    """Publish through the buyer's PostProxy. First call should stay draft=true."""
+    """Publish through the buyer's PostProxy. Live first posts use run_autopilot draft=false."""
     record = current_record()
     gate = blocked(record, need="publish")
     if gate:
@@ -436,7 +436,7 @@ async def run_autopilot_tool(
     niche: str = "",
     source_url: str = "",
     mock: bool = False,
-    draft: bool = True,
+    draft: bool = False,
 ) -> dict[str, Any]:
     """Live spine: scan → download/trim → write THEIR copy → publish. Mock is always rejected."""
     if mock:

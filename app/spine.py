@@ -401,7 +401,7 @@ async def run_autopilot(
     scan: dict[str, Any] = {}
     media: dict[str, Any] | None = None
     url = ""
-    for attempt in range(3):
+    for attempt in range(5):
         exclude = [item["url"] for item in skipped]
         if pinned and attempt == 0:
             scan = {

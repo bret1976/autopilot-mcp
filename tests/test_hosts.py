@@ -98,7 +98,15 @@ def test_host_handshakes_and_fast_tools() -> None:
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
         names = {t["name"] for t in _json(listed)["result"]["tools"]}
-        assert {"onboard", "status", "run_autopilot", "scan_trends", "set_automation"}.issubset(names)
+        assert {
+            "onboard",
+            "status",
+            "run_autopilot",
+            "scan_trends",
+            "set_automation",
+            "confirm_schedule",
+            "choose_start",
+        }.issubset(names)
 
         onboard = client.post(
             f"/mcp/t/{token}",

@@ -276,6 +276,7 @@ def test_get_probe_is_200_not_405() -> None:
         assert body["transport"] == "streamable-http"
         assert body["server"]["name"] == "TrendPilot"
         assert body["first_tool"] == "onboard"
+        assert {"confirm_schedule", "choose_start", "run_autopilot", "set_automation"}.issubset(set(body["tools"]))
         head = client.head(f"/mcp/t/{token}")
         assert head.status_code == 200
 

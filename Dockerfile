@@ -7,7 +7,9 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    && python -c "import curl_cffi; print('curl_cffi', curl_cffi.__version__)" \
+    && yt-dlp --version
 COPY . .
 
 ENV PORT=8080

@@ -93,6 +93,15 @@ def mcp_probe_payload() -> dict:
         "allow": ["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
         "hint": "This URL is a Streamable HTTP MCP server. POST JSON-RPC initialize here. GET without text/event-stream is a connector probe. First tool is onboard() with no website unless the user just pasted one.",
         "first_tool": "onboard",
+        "tools": [
+            "onboard",
+            "setup",
+            "set_automation",
+            "confirm_schedule",
+            "choose_start",
+            "run_autopilot",
+            "status",
+        ],
         "brand": None,
         "setup": "clean",
         "result": {

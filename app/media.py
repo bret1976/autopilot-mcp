@@ -108,28 +108,61 @@ def _is_youtube(url: str) -> bool:
     return any(part in host for part in ("youtube.com", "youtu.be", "youtube-nocookie.com"))
 
 
+def impersonate_available() -> bool:
+    try:
+        import curl_cffi  # noqa: F401
+
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _impersonate_failed(text: str) -> bool:
+    blob = (text or "").lower()
+    return any(
+        marker in blob
+        for marker in (
+            "impersonate",
+            "curl_cffi",
+            "curl-cffi",
+            "requested impersonate target",
+        )
+    )
+
+
 def _pull_strategies(url: str) -> list[list[str]]:
     cookies = ytdlp_cookies_file()
     cookie_args = ["--cookies", str(cookies)] if cookies else []
     shared = ["--no-playlist", "--geo-bypass", "--socket-timeout", "30"]
     extras: list[list[str]] = []
+    chrome = ["--impersonate", "chrome"] if impersonate_available() else []
     if _is_youtube(url):
         extras = [
+            chrome + ["--extractor-args", "youtube:player_client=android,ios"],
+            chrome + ["--extractor-args", "youtube:player_client=tv,web_safari"],
+            ["--extractor-args", "youtube:player_client=android,ios"],
             ["--extractor-args", "youtube:player_client=tv,web_safari"],
             ["--extractor-args", "youtube:player_client=web_embedded,tv_embedded"],
             ["--extractor-args", "youtube:player_client=mweb,web"],
-            ["--impersonate", "chrome", "--extractor-args", "youtube:player_client=tv,web_safari"],
         ]
         if cookie_args:
-            extras.insert(0, cookie_args + ["--extractor-args", "youtube:player_client=web,mweb,tv"])
+            extras.insert(0, cookie_args + chrome + ["--extractor-args", "youtube:player_client=web,mweb,tv"])
     else:
-        extras = [
-            ["--impersonate", "chrome"],
-            [],
-        ]
+        extras = []
+        if chrome:
+            extras.extend([["--impersonate", "chrome"], ["--impersonate", "safari"]])
+        extras.append([])
         if cookie_args:
-            extras.insert(0, cookie_args)
-    return [shared + extra for extra in extras]
+            extras.insert(0, cookie_args + chrome)
+    cleaned: list[list[str]] = []
+    seen: set[tuple[str, ...]] = set()
+    for extra in extras:
+        key = tuple(extra)
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(shared + extra)
+    return cleaned
 
 
 def _find_raw(dest: Path, stem: str) -> Path | None:
@@ -200,8 +233,16 @@ def download_and_cut(
             break
         last_err = (pull.stderr or pull.stdout or "yt-dlp failed")[-800:]
         raw = None
+        if _impersonate_failed(last_err) and not impersonate_available():
+            continue
 
     if raw is None:
+        if _impersonate_failed(last_err) and not impersonate_available():
+            raise MediaError(
+                "yt-dlp Chrome impersonation is missing on this host (curl_cffi). "
+                + source_block_message(source_url, last_err),
+                code="download_failed",
+            )
         code = "source_bot_check" if is_source_block(last_err) else "download_failed"
         raise MediaError(source_block_message(source_url, last_err), code=code)
 

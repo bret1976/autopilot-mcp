@@ -104,6 +104,31 @@ async def test_choose_start_now_runs_autopilot(monkeypatch) -> None:
     assert result.get("draft") is False or seen.get("draft") is False
 
 
+@pytest.mark.asyncio
+async def test_cached_host_can_start_via_set_automation(monkeypatch) -> None:
+    bind_buyer("cached-host")
+    ensure_buyer("cached-host")
+    reset_instance("cached-host")
+    await setup(
+        gemini_api_key="test-gemini-not-real",
+        postproxy_api_key="test-postproxy-not-real",
+        postproxy_profile_group_id="grp_test",
+        brand_name="North Light",
+        website_url="https://northlight.example",
+        brand_voice="Write as North Light.",
+    )
+    seen: dict[str, object] = {}
+
+    async def fake_run(*args, **kwargs):
+        seen.update(kwargs)
+        return {"ok": True, "draft": kwargs.get("draft"), "started": True}
+
+    monkeypatch.setattr("app.mcp_server.run_autopilot_tool", fake_run)
+    result = await set_automation(times="8:00 AM and 5:00 PM", confirm=True, start_mode="now")
+    assert result["start_mode"] == START_NOW
+    assert seen.get("draft") is False
+
+
 def test_clock_and_start_helpers() -> None:
     assert parse_clock_hour("5pm") == 17
     assert parse_clock_hour("5:00 PM") == 17

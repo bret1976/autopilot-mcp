@@ -65,12 +65,16 @@ mcp = FastMCP(
         "5) After the three APIs are saved, ask what time of day and how many times per day. "
         "Always suggest twice a day (8:00 AM and 5:00 PM). Then call set_automation with those times. "
         "Do not post yet. "
-        "6) Show the Confirm schedule button. When they click it, call confirm_schedule. "
-        "Automations are then set. They can change times later with set_automation. "
+        "6) Show the Confirm schedule button. Call confirm_schedule, or set_automation(confirm=true) "
+        "if confirm_schedule is not in your tool list. Automations are then set. "
+        "They can change times later with set_automation. "
         "7) Show three buttons: Autopost Right Now; Start AutoPost at scheduled times; "
         "Autopost right now and then start automation for scheduled times. "
-        "8) Call choose_start with that choice. If now or now_and_scheduled, "
-        "run_autopilot(draft=false) posts live. If scheduled only, wait for those times. "
+        "8) Call choose_start with that choice. If choose_start is not in your tool list, "
+        "call set_automation(start_mode=now|scheduled|now_and_scheduled) or run_autopilot(draft=false). "
+        "If now or now_and_scheduled, live post. If scheduled only, wait for those times. "
+        "This same Autopost path works on ChatGPT, Claude, Claude Code, Grok, Gemini, "
+        "Google Antigravity, Cursor, and Codex. Refresh the connector if your tool list is stale. "
         "Never invent keys. Never mock. Never invent a clip. Never post caption-only. "
         "If download fails with source_bot_check, call run_autopilot again without source_url. "
         "run_autopilot returns started=true. Poll status until job.status is ok or error."
@@ -556,15 +560,16 @@ async def set_automation(
     times: str | None = None,
     times_per_day: int | None = None,
     confirm: bool = False,
+    start_mode: str | None = None,
 ) -> dict[str, Any]:
-    """Save Autopost times. During setup this drafts the schedule, then Confirm locks it in.
+    """Save Autopost times. Works on every host, even if confirm_schedule is cached away.
 
     times: '8:00 AM and 5:00 PM'. times_per_day: default suggestion is 2.
-    daily_run_hours: [8, 17] or '8,17'. Buyer can change times at any time.
+    confirm=true locks the schedule. start_mode: now | scheduled | now_and_scheduled.
     """
     record = current_record()
     gate = blocked(record, need="run")
-    if gate and (enabled is True or confirm):
+    if gate and (enabled is True or confirm or start_mode):
         return gate
     later = infer_step(record) == RUNNING or bool(record.get("start_mode"))
     saved = _apply_schedule_inputs(
@@ -577,9 +582,11 @@ async def set_automation(
         times_per_day=times_per_day,
         enabled=enabled,
         require_approval=require_approval,
-        confirm=confirm,
+        confirm=confirm or bool(start_mode),
         already_running=later,
     )
+    if start_mode:
+        return await choose_start(start_mode)
     payload = _onboard_payload(saved)
     payload["ok"] = True
     payload["message"] = payload["say_to_user"]

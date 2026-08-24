@@ -12,7 +12,7 @@ from urllib.parse import urlencode, urlparse
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from app.config import PRODUCT_NAME, data_dir, public_base_url
+from app.config import MCP_SERVER_NAME, data_dir, public_base_url
 from app.tokens import token_from_paste, verify_token
 
 router = APIRouter(tags=["oauth"])
@@ -39,7 +39,7 @@ def resource_url(request: Request | None = None) -> str:
 
 def www_authenticate(request: Request | None = None) -> str:
     meta = f"{request_base(request)}/.well-known/oauth-protected-resource"
-    return f'Bearer realm="{PRODUCT_NAME}", resource_metadata="{meta}"'
+    return f'Bearer realm="{MCP_SERVER_NAME}", resource_metadata="{meta}"'
 
 
 def _codes_path():
@@ -146,7 +146,7 @@ async def oauth_register(request: Request):
             "token_endpoint_auth_method": body.get("token_endpoint_auth_method") or "none",
             "grant_types": body.get("grant_types") or ["authorization_code"],
             "response_types": body.get("response_types") or ["code"],
-            "client_name": body.get("client_name") or PRODUCT_NAME,
+            "client_name": body.get("client_name") or MCP_SERVER_NAME,
         },
         status_code=201,
     )
@@ -171,12 +171,12 @@ def _authorize_html(request: Request, error: str = "") -> HTMLResponse:
 <html lang="en"><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Connect {PRODUCT_NAME}</title>
+<title>Connect {MCP_SERVER_NAME}</title>
 <link rel="stylesheet" href="/assets/page.css"/>
 </head>
 <body>
 <div class="shell buy">
-  <p class="kicker">{PRODUCT_NAME}</p>
+  <p class="kicker">{MCP_SERVER_NAME}</p>
   <h1>Connect your license</h1>
   <p class="lede">Grok, Claude, ChatGPT, and other hosts ask us to confirm the same signed URL you already have. Paste the MCP link or the token after <code>token=</code>.</p>
   {err_html}

@@ -79,7 +79,7 @@ class NormalizeMcpPathMiddleware:
 
 
 def mcp_probe_payload() -> dict:
-    from app.config import PRODUCT_NAME, PRICE_USD
+    from app.config import MCP_SERVER_NAME, PRICE_USD
 
     return {
         "ok": True,
@@ -87,16 +87,18 @@ def mcp_probe_payload() -> dict:
         "jsonrpc": "2.0",
         "transport": "streamable-http",
         "protocol": "2024-11-05",
-        "product": PRODUCT_NAME,
+        "product": MCP_SERVER_NAME,
         "price": PRICE_USD,
-        "server": {"name": "TrendPilot", "title": PRODUCT_NAME},
+        "server": {"name": MCP_SERVER_NAME, "title": MCP_SERVER_NAME},
         "allow": ["GET", "HEAD", "POST", "DELETE", "OPTIONS"],
-        "hint": "This URL is a Streamable HTTP MCP server. POST JSON-RPC initialize here. GET without text/event-stream is a connector probe.",
+        "hint": "This URL is a Streamable HTTP MCP server. POST JSON-RPC initialize here. GET without text/event-stream is a connector probe. First tool is onboard() with no website unless the user just pasted one.",
         "first_tool": "onboard",
+        "brand": None,
+        "setup": "clean",
         "result": {
             "protocolVersion": "2024-11-05",
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "TrendPilot", "title": PRODUCT_NAME},
+            "serverInfo": {"name": MCP_SERVER_NAME, "title": MCP_SERVER_NAME},
         },
     }
 

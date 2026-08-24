@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 os.environ.setdefault("MCP_ISSUER_SECRET", "test-issuer-secret")
@@ -9,7 +10,7 @@ import pytest
 
 from app.mcp_server import bind_buyer, mcp, onboard, run_autopilot_tool, setup
 from app.onboard import brand_from_html, brand_name_from_host, hashtags_from_name, readiness
-from app.store import apply_owner_studio_brand, ensure_buyer, load_buyer, save_buyer
+from app.store import apply_owner_studio_brand, ensure_buyer, load_buyer, reset_instance, save_buyer
 
 CORY_HTML = """
 <html><head>
@@ -28,11 +29,17 @@ CORY_HTML = """
 async def test_onboard_and_run_ask_for_buyer_keys() -> None:
     bind_buyer("fresh-studio")
     ensure_buyer("fresh-studio")
+    reset_instance("fresh-studio")
     report = await onboard()
     assert report["needs_setup"] is True
     assert report["ready"] is False
     assert report["missing"] == ["website_url"]
     assert "website" in report["say_to_user"].lower()
+    assert report["step_name"] == "ask_website"
+    assert "loaded and ready" in report["say_to_user"].lower()
+    assert "6frame" not in report["say_to_user"].lower()
+    assert report["config"]["brand_name"] is None
+    assert report["config"]["website_url"] is None
 
     refused = await run_autopilot_tool()
     assert refused["ok"] is False
@@ -72,6 +79,7 @@ async def test_setup_with_brand_marks_ready() -> None:
 async def test_brand_then_asks_for_three_apis() -> None:
     bind_buyer("brand-first")
     ensure_buyer("brand-first")
+    reset_instance("brand-first")
     after_brand = await setup(
         brand_name="Cory Connects",
         website_url="https://coryconnects.example",
@@ -85,8 +93,10 @@ async def test_brand_then_asks_for_three_apis() -> None:
         "postproxy_api_key",
         "postproxy_profile_group_id",
     ]
-    assert "Company branded" in after_brand["say_to_user"]
+    assert "Branding for Cory Connects" in after_brand["say_to_user"]
+    assert "now confirmed" in after_brand["say_to_user"]
     assert "three APIs" in after_brand["say_to_user"]
+    assert after_brand["step_name"] == "ask_apis"
 
     after_keys = await setup(
         gemini_api_key="test-gemini-not-real",
@@ -94,11 +104,11 @@ async def test_brand_then_asks_for_three_apis() -> None:
         postproxy_profile_group_id="grp_test",
     )
     assert after_keys["ready"] is True
-    assert "draft=false" in after_keys["say_to_user"]
-    assert after_keys["say_to_user"].index("run_autopilot") < after_keys["say_to_user"].index(
-        "set_automation"
-    )
-    assert "draft=true" not in " ".join(after_keys["next_after_keys"])
+    assert after_keys["step_name"] == "ask_schedule"
+    assert "twice a day" in after_keys["say_to_user"].lower()
+    assert "set_automation" in after_keys["say_to_user"]
+    assert "run_autopilot" not in after_keys["say_to_user"]
+    assert "Do not post yet" in after_keys["say_to_user"]
 
 
 @pytest.mark.asyncio
@@ -129,11 +139,46 @@ async def test_onboard_wipes_leftover_company_every_time() -> None:
     assert "website" in result["say_to_user"].lower()
     assert "Secured Quantum" not in result["say_to_user"]
     assert "TrendPilot" in result["say_to_user"]
+    assert "6frame" not in result["say_to_user"].lower()
+    assert "6framestudio" not in json.dumps(result).lower()
     wiped = load_buyer("bret-jenny") or {}
     assert wiped.get("brand_name") == ""
     assert wiped.get("gemini_api_key") == ""
     assert wiped.get("last_run") is None
     assert wiped.get("automation_enabled") is False
+
+
+@pytest.mark.asyncio
+async def test_onboard_never_mentions_six_frame_leftover() -> None:
+    bind_buyer("bret-jenny")
+    record = ensure_buyer("bret-jenny")
+    record.update(
+        {
+            "brand_name": "6Frame Studio",
+            "brand_voice": "Cinematic leftover studio voice",
+            "website_url": "https://6framestudio.com/",
+            "gemini_api_key": "old-gemini",
+            "postproxy_api_key": "old-pp",
+            "postproxy_profile_group_id": "old-group",
+            "last_run": {"id": "old-6frame"},
+            "automation_enabled": True,
+        }
+    )
+    save_buyer(record)
+
+    result = await onboard()
+    blob = json.dumps(result).lower()
+    assert result["missing"] == ["website_url"]
+    assert result["step_name"] == "ask_website"
+    assert "loaded and ready" in result["say_to_user"].lower()
+    assert "paste your company website" in result["say_to_user"].lower()
+    assert "6frame" not in blob
+    assert "6framestudio" not in blob
+    assert result["config"]["brand_name"] is None
+    assert result["config"]["website_url"] is None
+    wiped = load_buyer("bret-jenny") or {}
+    assert wiped.get("brand_name") == ""
+    assert wiped.get("website_url") == ""
 
 
 @pytest.mark.asyncio
@@ -160,7 +205,8 @@ async def test_new_website_resets_previous_company_keys() -> None:
         "postproxy_api_key",
         "postproxy_profile_group_id",
     ]
-    assert "Company branded" in switched["say_to_user"]
+    assert "Branding for North Light" in switched["say_to_user"]
+    assert "now confirmed" in switched["say_to_user"]
 
 
 def test_readiness_and_hashtag_from_name() -> None:
@@ -242,8 +288,10 @@ async def test_onboard_with_website_locks_brand_and_asks_apis(monkeypatch) -> No
         "postproxy_api_key",
         "postproxy_profile_group_id",
     ]
-    assert "Company branded" in (result.get("message") or result["say_to_user"])
+    assert "Branding for Secured Quantum Services" in (result.get("message") or result["say_to_user"])
+    assert "now confirmed" in (result.get("message") or result["say_to_user"])
     assert "gemini" in result["say_to_user"].lower()
+    assert result["step_name"] == "ask_apis"
 
 
 @pytest.mark.asyncio
@@ -257,6 +305,8 @@ async def test_onboard_is_registered() -> None:
         "setup",
         "run_autopilot",
         "set_automation",
+        "confirm_schedule",
+        "choose_start",
         "approve_and_publish",
         "proof_link",
     }.issubset(names)

@@ -125,7 +125,8 @@ async def test_set_automation_saves_mode() -> None:
     assert report["automation"]["automation_enabled"] is True
     assert report["automation"]["require_approval"] is False
     assert report["automation"]["mode"] == "scan_and_post"
-    assert "no approval" in report["message"].lower() or "no click" in report["say_to_user"].lower()
+    assert report["step_name"] == "choose_start"
+    assert "Confirm" in report["say_to_user"] or "Automations are set" in report["say_to_user"]
 
     multi = await set_automation(
         enabled=True,
@@ -135,8 +136,8 @@ async def test_set_automation_saves_mode() -> None:
     )
     assert multi["automation"]["daily_run_hours"] == [8, 17]
     assert multi["automation"]["daily_run_days"] == ["mon", "tue", "wed", "thu", "fri"]
-    assert "08:00" in multi["say_to_user"]
-    assert "17:00" in multi["say_to_user"]
+    assert "8:00 AM" in multi["say_to_user"]
+    assert "5:00 PM" in multi["say_to_user"]
 
     gated = await set_automation(enabled=True, require_approval=True)
     assert gated["automation"]["mode"] == "approve_then_post"
@@ -204,16 +205,14 @@ async def test_automation_tools_registered() -> None:
     assert {"set_automation", "approve_and_publish", "run_autopilot"}.issubset(names)
 
 
-def test_ready_copy_tells_host_to_autopost_then_ask_times() -> None:
+def test_ready_copy_asks_schedule_before_any_post() -> None:
     record = _ready("auto-copy")
     report = readiness(record)
     say = report["say_to_user"]
-    assert "run_autopilot" in say
-    assert "draft=false" in say
-    assert "proof" in say.lower()
+    assert report["step_name"] == "ask_schedule"
+    assert "twice a day" in say.lower()
     assert "set_automation" in say
-    assert say.index("run_autopilot") < say.index("set_automation")
-    assert "ONLY AFTER" in say
-    assert "draft=true" not in " ".join(report["next_after_keys"])
+    assert "run_autopilot" not in say
+    assert "Do not post yet" in say
     pub = automation_public(record)
     assert pub["mode"] == "off"

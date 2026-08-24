@@ -20,11 +20,25 @@ from app.store import (
     clear_buyer_api_keys,
     ensure_buyer,
     load_buyer,
+    normalize_hours,
     public_config,
     reset_instance,
     save_buyer,
     should_start_new_instance,
     update_setup,
+)
+from app.walkthrough import (
+    ASK_WEBSITE,
+    CHOOSE_START,
+    RUNNING,
+    START_BOTH,
+    START_NOW,
+    START_SCHEDULED,
+    first_step_config,
+    hours_for_times_per_day,
+    infer_step,
+    normalize_start_mode,
+    walkthrough_view,
 )
 from app.tokens import extract_token, verify_token
 
@@ -34,20 +48,30 @@ mcp = FastMCP(
     "TrendPilot",
     instructions=(
         "You are TrendPilot. Use ONLY TrendPilot tools. "
-        "Do not browse websites. Do not open about/manifesto/linkedin pages. "
-        "Do not read workspace files or rules. Do not research the brand. "
-        "Do not replace the scraped voice. Do not draft posts. Do not call status first. "
-        "If the user already pasted a website, call onboard(website_url=that_url) immediately. "
-        "Otherwise call onboard() and ask only for the website. "
-        "Locked order, every company, every time: "
-        "1) onboard(website_url) brands the homepage. Say: Company branded. "
-        "2) Ask only the three APIs from ask_the_user (Gemini, PostProxy key, PostProxy profile group). "
-        "3) After setup saves those keys, call run_autopilot(draft=false). Viral scan and live post. "
-        "4) When the job is ok, send proof.url. "
-        "5) ONLY AFTER the proof link, ask which days and which times they want automation "
-        "(multiple times per day is fine). Then call set_automation("
-        "enabled=true, require_approval=false, daily_run_hours=[...], daily_run_days=[...]). "
-        "Never invent keys. Never mock. Never stage a draft. Never ask them to type publish. "
+        "This is a brand-new company setup. Never assume a brand. "
+        "Never mention leftover keys, leftover drafts, or any company that is not the website "
+        "the user just pasted in THIS chat. "
+        "Do not browse websites. Do not open a Cloud Browser. Do not start a second conversation. "
+        "Do not say tell me done. Do not read workspace files. Do not research the brand. "
+        "Do not draft posts. Do not call status first. "
+        "Repeat say_to_user verbatim. Render choices as buttons. "
+        "Locked 8-step order, every company, every time: "
+        "1) Call onboard() with NO website_url unless the user just pasted a URL. "
+        "Say TrendPilot is loaded and ready. "
+        "2) Ask the user to paste their company website. Then call onboard(website_url=that_url). "
+        "3) Say branding for THEIR company is now confirmed. "
+        "4) Ask for the three APIs in THIS chat: Gemini API key, PostProxy API key, "
+        "PostProxy profile group ID. Call setup with those values. Never send them to another window. "
+        "5) After the three APIs are saved, ask what time of day and how many times per day. "
+        "Always suggest twice a day (8:00 AM and 5:00 PM). Then call set_automation with those times. "
+        "Do not post yet. "
+        "6) Show the Confirm schedule button. When they click it, call confirm_schedule. "
+        "Automations are then set. They can change times later with set_automation. "
+        "7) Show three buttons: Autopost Right Now; Start AutoPost at scheduled times; "
+        "Autopost right now and then start automation for scheduled times. "
+        "8) Call choose_start with that choice. If now or now_and_scheduled, "
+        "run_autopilot(draft=false) posts live. If scheduled only, wait for those times. "
+        "Never invent keys. Never mock. Never invent a clip. Never post caption-only. "
         "If download fails with source_bot_check, call run_autopilot again without source_url. "
         "run_autopilot returns started=true. Poll status until job.status is ok or error."
     ),
@@ -86,6 +110,9 @@ def buyer_from_request(request: Request) -> str | None:
 
 def _onboard_payload(record: dict[str, Any]) -> dict[str, Any]:
     report = readiness(record)
+    config = public_config(record)
+    if report.get("step_name") == ASK_WEBSITE:
+        config = first_step_config(config)
     return {
         "ok": report["ready"],
         "needs_setup": not report["ready"],
@@ -95,17 +122,25 @@ def _onboard_payload(record: dict[str, Any]) -> dict[str, Any]:
         "missing": report["missing"],
         "next_after_keys": report["next_after_keys"],
         "defaults": report["defaults"],
-        "config": public_config(record),
+        "walkthrough": report["walkthrough"],
+        "step": report["step"],
+        "step_name": report["step_name"],
+        "choices": report["choices"],
+        "next_tool": report["next_tool"],
+        "host_rules": report["host_rules"],
+        "verbatim": True,
+        "config": config,
         "automation": automation_public(record),
     }
 
 
 @mcp.tool
 async def onboard(website_url: str | None = None) -> dict[str, Any]:
-    """FIRST call. If they already pasted a website, pass website_url.
+    """FIRST call. Clean setup. Never assume a brand.
 
-    Wipes leftover companies. Brands that site. Then ask only for the three APIs.
-    Do not browse the site yourself.
+    Call with no website_url unless the user just pasted a site in this chat.
+    Wipes leftover companies, keys, drafts, and jobs. Then Step 1+2: ready, ask for THEIR website.
+    Do not browse. Do not mention any leftover company.
     """
     buyer_id = current_buyer_id()
     ensure_buyer(buyer_id)
@@ -190,13 +225,10 @@ async def setup(
             extra = {"brand_from_website": {k: v for k, v in fetched.items() if k != "brand_voice"}}
         else:
             extra = {"brand_from_website": fetched}
+    saved = update_setup(saved["buyer_id"], {"walkthrough_step": infer_step(saved)})
     payload = _onboard_payload(saved)
     payload.update(extra)
-    payload["message"] = (
-        "Setup saved. Keys stay on this service and will not be printed again."
-        if payload["ready"]
-        else payload["say_to_user"]
-    )
+    payload["message"] = payload["say_to_user"]
     return payload
 
 
@@ -260,14 +292,10 @@ async def set_brand_from_website(website_url: str, brand_name: str | None = None
             "brand_hashtags": fetched.get("brand_hashtags"),
         },
     )
+    saved = update_setup(saved["buyer_id"], {"walkthrough_step": infer_step(saved)})
     payload = _onboard_payload(saved)
     payload["brand_from_website"] = {k: v for k, v in fetched.items() if k != "brand_voice"}
-    if payload.get("needs_setup"):
-        payload["message"] = (
-            f"Company branded ({saved.get('brand_name') or fetched.get('brand_name')}). "
-            "Onboarding next — paste your three APIs: Gemini API key, PostProxy API key, "
-            "and PostProxy profile group id."
-        )
+    payload["message"] = payload["say_to_user"]
     return payload
 
 
@@ -373,7 +401,7 @@ async def write_copy_tool(
     topic_tags: list[str] | None = None,
     source_url: str = "",
 ) -> dict[str, Any]:
-    """Write captions in the buyer's brand voice. Not 6Frame unless they are 6Frame."""
+    """Write captions in the buyer's brand voice from their website."""
     record = current_record()
     gate = blocked(record, need="scan")
     if gate:
@@ -471,6 +499,52 @@ async def run_autopilot_tool(
     return spawn_job(buyer_id, "run_autopilot", _job, {"source_url": source_url, "niche": niche})
 
 
+def _apply_schedule_inputs(
+    record: dict[str, Any],
+    *,
+    daily_run_hour: int | None = None,
+    daily_run_hours: list[int] | str | None = None,
+    daily_run_days: list[str] | str | None = None,
+    daily_run_timezone: str | None = None,
+    times: str | None = None,
+    times_per_day: int | None = None,
+    enabled: bool | None = None,
+    require_approval: bool | None = None,
+    confirm: bool = False,
+    already_running: bool = False,
+) -> dict[str, Any]:
+    hours = normalize_hours(times if times is not None else daily_run_hours)
+    if not hours and daily_run_hour is not None:
+        hours = normalize_hours(daily_run_hour)
+    if not hours and times_per_day:
+        hours = hours_for_times_per_day(times_per_day)
+    fields: dict[str, Any] = {
+        "daily_run_days": daily_run_days,
+        "daily_run_timezone": daily_run_timezone,
+    }
+    if hours:
+        fields["daily_run_hours"] = hours
+        fields["daily_run_hour"] = hours[0]
+        fields["schedule_set_by_user"] = True
+    later = already_running or bool(record.get("start_mode"))
+    lock = confirm or later or enabled is True
+    if lock and (hours or record.get("schedule_set_by_user") or later):
+        fields["schedule_set_by_user"] = True
+        fields["schedule_confirmed"] = True
+        fields["automation_enabled"] = True if enabled is None else enabled
+        fields["require_approval"] = False if require_approval is None else require_approval
+        fields["walkthrough_step"] = RUNNING if later else CHOOSE_START
+    elif hours:
+        fields["schedule_confirmed"] = False
+        fields["automation_enabled"] = False if enabled is None else enabled
+        fields["walkthrough_step"] = "confirm_schedule"
+    elif enabled is not None:
+        fields["automation_enabled"] = enabled
+        fields["require_approval"] = False if enabled is True and require_approval is None else require_approval
+    saved = update_setup(record["buyer_id"], fields)
+    return update_setup(saved["buyer_id"], {"walkthrough_step": infer_step(saved)})
+
+
 @mcp.tool
 async def set_automation(
     enabled: bool | None = None,
@@ -479,46 +553,94 @@ async def set_automation(
     daily_run_hours: list[int] | str | None = None,
     daily_run_days: list[str] | str | None = None,
     daily_run_timezone: str | None = None,
+    times: str | None = None,
+    times_per_day: int | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
-    """Set days and times for recurring scan-and-post. Call this ONLY after the proof link.
+    """Save Autopost times. During setup this drafts the schedule, then Confirm locks it in.
 
-    daily_run_hours: one or more hours, e.g. [8, 17] or "8,17".
-    daily_run_days: everyday, weekdays, weekends, or ["mon","wed","fri"].
-    require_approval=false posts at those times with no extra click.
+    times: '8:00 AM and 5:00 PM'. times_per_day: default suggestion is 2.
+    daily_run_hours: [8, 17] or '8,17'. Buyer can change times at any time.
     """
     record = current_record()
     gate = blocked(record, need="run")
-    if gate and enabled is True:
+    if gate and (enabled is True or confirm):
         return gate
+    later = infer_step(record) == RUNNING or bool(record.get("start_mode"))
+    saved = _apply_schedule_inputs(
+        record,
+        daily_run_hour=daily_run_hour,
+        daily_run_hours=daily_run_hours,
+        daily_run_days=daily_run_days,
+        daily_run_timezone=daily_run_timezone,
+        times=times,
+        times_per_day=times_per_day,
+        enabled=enabled,
+        require_approval=require_approval,
+        confirm=confirm,
+        already_running=later,
+    )
+    payload = _onboard_payload(saved)
+    payload["ok"] = True
+    payload["message"] = payload["say_to_user"]
+    return payload
+
+
+@mcp.tool
+async def confirm_schedule() -> dict[str, Any]:
+    """Step 6. Lock the draft times and set automations. Buyer can change times later."""
+    record = current_record()
+    gate = blocked(record, need="run")
+    if gate:
+        return gate
+    if not record.get("schedule_set_by_user"):
+        saved = _apply_schedule_inputs(record, times_per_day=2, confirm=True)
+    else:
+        saved = _apply_schedule_inputs(record, confirm=True)
+    payload = _onboard_payload(saved)
+    payload["ok"] = True
+    payload["message"] = payload["say_to_user"]
+    return payload
+
+
+@mcp.tool
+async def choose_start(mode: str) -> dict[str, Any]:
+    """Step 7-8. mode: now | scheduled | now_and_scheduled."""
+    record = current_record()
+    gate = blocked(record, need="run")
+    if gate:
+        return gate
+    chosen = normalize_start_mode(mode)
+    if not chosen:
+        payload = _onboard_payload(record)
+        payload["ok"] = False
+        payload["say_to_user"] = (
+            "Pick one start option: Autopost Right Now; "
+            "Start AutoPost at scheduled times; "
+            "or Autopost right now and then start automation for scheduled times."
+        )
+        return payload
+    if not record.get("schedule_confirmed"):
+        record = _apply_schedule_inputs(record, confirm=True)
     saved = update_setup(
         record["buyer_id"],
         {
-            "automation_enabled": enabled,
-            "require_approval": False if enabled is True and require_approval is None else require_approval,
-            "daily_run_hour": daily_run_hour,
-            "daily_run_hours": daily_run_hours,
-            "daily_run_days": daily_run_days,
-            "daily_run_timezone": daily_run_timezone,
+            "start_mode": chosen,
+            "walkthrough_step": RUNNING,
+            "automation_enabled": True,
+            "require_approval": False,
         },
     )
-    auto = automation_public(saved)
-    if auto["automation_enabled"]:
-        if auto["require_approval"]:
-            message = (
-                f"Automation is on {auto['schedule']}. "
-                "Each run will scan and download, then wait. Call approve_and_publish to post."
-            )
-        else:
-            message = (
-                f"Automation is on {auto['schedule']}. "
-                "Each run will scan, download the original, and post with no approval click."
-            )
-    else:
-        message = "Automation is off. One-off runs still work via run_autopilot. The MCP URL is unchanged."
+    if chosen in {START_NOW, START_BOTH}:
+        result = await run_autopilot_tool(draft=False)
+        result["start_mode"] = chosen
+        result["walkthrough"] = walkthrough_view(saved)
+        result["say_to_user"] = walkthrough_view(saved)["say_to_user"]
+        return result
     payload = _onboard_payload(saved)
     payload["ok"] = True
-    payload["message"] = message
-    payload["say_to_user"] = message
+    payload["start_mode"] = chosen
+    payload["message"] = payload["say_to_user"]
     return payload
 
 

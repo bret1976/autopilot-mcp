@@ -15,6 +15,7 @@ from app.config import (
     STUDIO_NAME,
 )
 from app.hashtags import normalize_tag
+from app.walkthrough import walkthrough_view
 
 _TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
 _META = re.compile(
@@ -93,8 +94,8 @@ def missing_fields(record: dict[str, Any]) -> list[dict[str, str]]:
         return [
             {
                 "id": "website_url",
-                "prompt": "Paste the company website. This run is brand-new — that site is the brand.",
-                "why": "TrendPilot learns this company from the website before any APIs or posts.",
+                "prompt": "Paste your company website.",
+                "why": "TrendPilot brands THIS company from that site. No previous brand is reused.",
             }
         ]
     return [item for item in _api_prompts() if not str(record.get(item["id"]) or "").strip()]
@@ -108,37 +109,7 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
     )
     has_brand = not any(item["id"] == "website_url" for item in missing)
     ready = can_scan and can_publish and has_brand
-    ask = [
-        f"{i}. {item['prompt']} — {item['why']}" for i, item in enumerate(missing, start=1)
-    ]
-    if missing:
-        if has_brand and not (can_scan and can_publish):
-            brand = str(record.get("brand_name") or "this brand").strip()
-            site = str(record.get("website_url") or "").strip()
-            site_bit = f" from {site}" if site else ""
-            say = (
-                f"Company branded ({brand}{site_bit}). "
-                "Onboarding next — paste these three APIs: "
-                "Gemini API key, PostProxy API key, and PostProxy profile group id. "
-                "Nothing else. Do not browse. Do not draft. Keys are never printed back.\n\n"
-                + "\n".join(ask)
-            )
-        else:
-            say = (
-                "TrendPilot is connected. Paste the company website. "
-                "I will brand that site, then ask for the three APIs. "
-                "Do not browse the site yourself. Do not research. Do not draft.\n\n"
-                + "\n".join(ask)
-            )
-    else:
-        say = (
-            "Company branded and the three APIs are in. "
-            "Call run_autopilot with draft=false now — viral scan and live post, no draft. "
-            "When the job is ok, send the proof link. "
-            "ONLY AFTER that proof link, ask which days and which times they want automation "
-            "(multiple times per day is fine) and call set_automation. "
-            "Do not browse their site. Do not research. Do not draft first."
-        )
+    walk = walkthrough_view(record)
     return {
         "ready": ready,
         "can_scan": can_scan,
@@ -146,18 +117,23 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
         "has_brand": has_brand,
         "missing": [item["id"] for item in missing],
         "ask_the_user": missing,
-        "say_to_user": say,
-        "next_after_keys": [
-            "Call run_autopilot with draft=false now. Viral scan and live post.",
-            "When the job is ok, send proof.url. That is the proof step.",
-            "Only after the proof link, ask days and times (multiple times per day ok) and call set_automation.",
-        ],
+        "say_to_user": walk["say_to_user"],
+        "next_after_keys": walk["next_after_keys"],
+        "walkthrough": walk,
+        "step": walk["step"],
+        "step_name": walk["step_name"],
+        "choices": walk["choices"],
+        "next_tool": walk["next_tool"],
+        "host_rules": walk["host_rules"],
+        "verbatim": True,
         "defaults": {
             "platforms": list(record.get("platforms") or ONBOARD_PLATFORMS),
             "daily_run_hour": record.get("daily_run_hour") or DEFAULT_DAILY_HOUR,
             "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
             "automation_enabled": False,
             "require_approval": False,
+            "times_per_day": walk["suggested_times_per_day"],
+            "suggested_hours": walk["suggested_hours"],
         },
     }
 
@@ -179,6 +155,13 @@ def blocked(record: dict[str, Any], *, need: str = "run") -> dict[str, Any] | No
         "missing": report["missing"],
         "defaults": report["defaults"],
         "next_after_keys": report["next_after_keys"],
+        "walkthrough": report["walkthrough"],
+        "step": report["step"],
+        "step_name": report["step_name"],
+        "choices": report["choices"],
+        "next_tool": report["next_tool"],
+        "host_rules": report["host_rules"],
+        "verbatim": True,
     }
 
 

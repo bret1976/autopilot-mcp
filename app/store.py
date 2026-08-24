@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,34 @@ from app.tokens import mint_token
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
+_CLOCK = re.compile(
+    r"^\s*(\d{1,2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?\s*$",
+    re.I,
+)
+
+
+def parse_clock_hour(value: Any) -> int | None:
+    """8, 8am, 8:00 AM, 17, 5pm, 5:00 PM → hour 0-23. 5pm is 17, not 5."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return max(0, min(int(value), 23))
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    match = _CLOCK.match(text)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    meridiem = (match.group(3) or "").replace(".", "")
+    if meridiem.startswith("p") and hour != 12:
+        hour += 12
+    elif meridiem.startswith("a") and hour == 12:
+        hour = 0
+    if hour > 23:
+        return None
+    return max(0, min(hour, 23))
+
 
 def normalize_hours(value: Any) -> list[int]:
     if value is None or value == "":
@@ -27,22 +56,22 @@ def normalize_hours(value: Any) -> list[int]:
     if isinstance(value, bool):
         return []
     if isinstance(value, (int, float)):
-        return [max(0, min(int(value), 23))]
+        parsed = parse_clock_hour(value)
+        return [parsed] if parsed is not None else []
     items: list[Any]
     if isinstance(value, str):
-        items = [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+        text = value.replace(";", ",").replace("&", ",")
+        text = re.sub(r"\band\b", ",", text, flags=re.I)
+        items = [part.strip() for part in text.split(",") if part.strip()]
     elif isinstance(value, list):
         items = value
     else:
         return []
     hours: list[int] = []
     for item in items:
-        text = str(item).strip().lower().replace("am", "").replace("pm", "")
-        text = text.split(":", 1)[0].strip()
-        try:
-            hours.append(max(0, min(int(float(text)), 23)))
-        except (TypeError, ValueError):
-            continue
+        parsed = parse_clock_hour(item)
+        if parsed is not None:
+            hours.append(parsed)
     return sorted(set(hours))
 
 
@@ -170,6 +199,10 @@ def ensure_buyer(
         "last_automation_slot": "",
         "public_base_url": "",
         "last_run": None,
+        "walkthrough_step": "ask_website",
+        "schedule_set_by_user": False,
+        "schedule_confirmed": False,
+        "start_mode": "",
     }
     _write(_buyer_path(buyer_id), record)
     return apply_owner_studio_brand(record)
@@ -195,6 +228,10 @@ def reset_instance(buyer_id: str) -> dict[str, Any]:
     record["last_automation_date"] = ""
     record["last_automation_slot"] = ""
     record["last_run"] = None
+    record["walkthrough_step"] = "ask_website"
+    record["schedule_set_by_user"] = False
+    record["schedule_confirmed"] = False
+    record["start_mode"] = ""
     return save_buyer(record)
 
 
@@ -293,7 +330,7 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         if key == "daily_run_days":
             record["daily_run_days"] = [WEEKDAYS[i] for i in normalize_days(value)]
             continue
-        if key in {"automation_enabled", "require_approval"}:
+        if key in {"automation_enabled", "require_approval", "schedule_set_by_user", "schedule_confirmed"}:
             fallback = True if key == "require_approval" else False
             record[key] = parse_bool(value, parse_bool(record.get(key), fallback))
             continue
@@ -310,6 +347,8 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
             "google_location_id",
             "last_automation_date",
             "last_automation_slot",
+            "walkthrough_step",
+            "start_mode",
         }:
             record[key] = str(value).strip()
     return save_buyer(record)
@@ -339,6 +378,10 @@ def public_config(record: dict[str, Any]) -> dict[str, Any]:
         "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
         "automation_enabled": bool(record.get("automation_enabled")),
         "require_approval": record.get("require_approval") is not False,
+        "walkthrough_step": record.get("walkthrough_step") or None,
+        "schedule_set_by_user": bool(record.get("schedule_set_by_user")),
+        "schedule_confirmed": bool(record.get("schedule_confirmed")),
+        "start_mode": record.get("start_mode") or None,
         "last_automation_date": record.get("last_automation_date") or None,
         "last_automation_slot": record.get("last_automation_slot") or None,
         "pending_approval": bool((record.get("last_run") or {}).get("pending_approval")),

@@ -116,11 +116,35 @@ def retrieve_checkout_session(session_id: str) -> Any:
     return stripe.checkout.Session.retrieve(session_id)
 
 
+def _stripe_get(obj: Any, key: str, default: Any = None) -> Any:
+    """Read a field from a StripeObject or plain dict without dict(StripeObject)."""
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    try:
+        val = getattr(obj, key, default)
+    except Exception:  # noqa: BLE001
+        return default
+    return default if val is None else val
+
+
 def session_is_paid(session: Any) -> bool:
-    status = str(getattr(session, "payment_status", None) or session.get("payment_status") or "")
+    status = str(_stripe_get(session, "payment_status") or "")
     return status == "paid"
 
 
 def metadata_from_session(session: Any) -> dict[str, str]:
-    raw = getattr(session, "metadata", None) or session.get("metadata") or {}
-    return {str(k): str(v) for k, v in dict(raw).items()}
+    raw = _stripe_get(session, "metadata") or {}
+    if hasattr(raw, "to_dict") and callable(raw.to_dict):
+        raw = raw.to_dict()
+    elif not isinstance(raw, dict):
+        try:
+            raw = dict(raw)
+        except TypeError:
+            # StripeObject: use keys() / [] access
+            try:
+                raw = {k: raw[k] for k in raw.keys()}  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                raw = {}
+    return {str(k): str(v) for k, v in raw.items() if v is not None}

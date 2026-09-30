@@ -365,12 +365,12 @@ async def order_status(request: Request, session_id: str | None = Query(default=
     meta = metadata_from_session(session)
     email = (meta.get("email") or getattr(session, "customer_email", None) or "").strip()
     if not paid:
+        payment_status = str(getattr(session, "payment_status", None) or "unpaid")
+        session_status = str(getattr(session, "status", None) or "")
         return {
             "ok": True,
-            "payment_status": str(
-                getattr(session, "payment_status", None) or session.get("payment_status") or "unpaid"
-            ),
-            "session_status": str(getattr(session, "status", None) or session.get("status") or ""),
+            "payment_status": payment_status,
+            "session_status": session_status,
             "session_id": session_id,
             "buyer_id": meta.get("buyer_id") or None,
             "mcp_url": None,

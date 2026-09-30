@@ -44,6 +44,7 @@ from app.automation import scheduler_loop, scheduler_started
 from app.mcp_server import bind_buyer, buyer_from_request, mcp
 from app.media import buyer_media_dir, verify_media
 from app.oauth import router as oauth_router, www_authenticate
+from app.agent_discovery import router as agent_discovery_router
 from app.orders import fulfill_order
 from app.proof import load_proof, proof_dir, render_proof_html
 from app.store import ensure_buyer, list_buyers, list_leads
@@ -99,6 +100,7 @@ mcp_app.add_middleware(
 app = FastAPI(title=PRODUCT_NAME, lifespan=lifespan, redirect_slashes=False)
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app.include_router(oauth_router)
+app.include_router(agent_discovery_router)
 app.mount("/assets", StaticFiles(directory=str(PUBLIC_DIR)), name="assets")
 app.mount("/mcp", mcp_app)
 app.add_middleware(HttpsLocationMiddleware)

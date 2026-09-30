@@ -40,11 +40,16 @@ from app.http_util import (
     TokenPathMiddleware,
     WellKnownRewriteMiddleware,
 )
-from app.automation import scheduler_loop, scheduler_started
+from app import automation
+from app.automation import scheduler_loop
 from app.mcp_server import bind_buyer, buyer_from_request, mcp
 from app.media import buyer_media_dir, verify_media
 from app.oauth import router as oauth_router, www_authenticate
-from app.agent_discovery import router as agent_discovery_router
+from app.agent_discovery import (
+    AgentDiscoveryHeadersMiddleware,
+    order_agent_payload,
+    router as agent_discovery_router,
+)
 from app.orders import fulfill_order
 from app.proof import load_proof, proof_dir, render_proof_html
 from app.store import ensure_buyer, list_buyers, list_leads
@@ -119,6 +124,7 @@ app.add_middleware(
     expose_headers=["Mcp-Session-Id", "mcp-session-id", "WWW-Authenticate"],
 )
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+app.add_middleware(AgentDiscoveryHeadersMiddleware)
 
 
 def _ctx(request: Request, **extra):
@@ -159,7 +165,7 @@ async def health():
         "data_dir": str(root),
         "data_dir_writable": writable,
         "persist": writable,
-        "scheduler": scheduler_started,
+        "scheduler": automation.scheduler_started,
     }
 
 
@@ -214,16 +220,7 @@ async def create_order(request: Request):
                 payment_link=stripe_payment_link() or None,
             ),
         )
-    return {
-        "ok": True,
-        "message": fulfilled["message"],
-        "url": fulfilled["url"],
-        "mcp_url": fulfilled["url"],
-        "order_id": fulfilled["order_id"],
-        "buyer_id": fulfilled["buyer_id"],
-        "days": fulfilled["days"],
-        "price": PRICE_USD,
-    }
+    return order_agent_payload(fulfilled)
 
 
 @app.post("/api/leads")
@@ -367,6 +364,84 @@ async def og():
     if not path.exists():
         raise HTTPException(status_code=404)
     return FileResponse(path, media_type="image/jpeg")
+
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    from fastapi.openapi.utils import get_openapi
+
+    schema = get_openapi(
+        title=app.title,
+        version="0.1.1",
+        description=(
+            f"{PRODUCT_NAME} — licensed MCP. Price {PRICE_LABEL}. "
+            "Agents: GET /llms.txt, GET /api/pricing, POST /api/orders, then connect /mcp/t/{token}."
+        ),
+        routes=app.routes,
+    )
+    schema.setdefault("info", {})["x-sku"] = "autopilot-mcp-license"
+    schema["info"]["x-price-usd"] = PRICE_USD
+    paths = schema.setdefault("paths", {})
+    orders = paths.get("/api/orders", {}).get("post")
+    if orders is not None:
+        orders["summary"] = "Mint a licensed MCP URL (agent-friendly JSON)"
+        orders["description"] = (
+            "POST JSON {name, email, source?} with Accept: application/json. "
+            "Returns mcp_url, sku, price_usd=$997, instructions, and host connect snippets. "
+            "HTML form posts from /buy produce the human buy page (unchanged)."
+        )
+        orders["requestBody"] = {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["name", "email"],
+                        "properties": {
+                            "name": {"type": "string"},
+                            "email": {"type": "string", "format": "email"},
+                            "studio": {"type": "string"},
+                            "client": {"type": "string"},
+                            "source": {"type": "string", "default": "buy", "examples": ["agent", "buy"]},
+                        },
+                    }
+                }
+            },
+        }
+        orders["responses"] = {
+            "200": {
+                "description": "License minted",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "ok": {"type": "boolean"},
+                                "sku": {"type": "string"},
+                                "price_usd": {"type": "integer"},
+                                "mcp_url": {"type": "string"},
+                                "order_id": {"type": "string"},
+                                "buyer_id": {"type": "string"},
+                                "instructions": {"type": "object"},
+                                "host_snippets": {"type": "object"},
+                            },
+                        }
+                    }
+                },
+            },
+            "400": {"description": "Missing name or email"},
+        }
+    pricing = paths.get("/api/pricing", {}).get("get")
+    if pricing is not None:
+        pricing["summary"] = "Machine-readable $997 one-time SKU"
+        pricing["description"] = "Public pricing block for agents. Price stays $997 once."
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 
 if __name__ == "__main__":

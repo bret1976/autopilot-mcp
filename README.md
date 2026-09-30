@@ -127,7 +127,7 @@ pytest
 
 ## Railway
 
-1. New project → deploy this GitHub repo (`VegasCryptoAgent/autopilot-mcp`), branch `main`.
+1. New project → deploy this GitHub repo (`bret1976/autopilot-mcp`), branch `main`.
 2. Builder: Dockerfile (see `railway.toml`).
 3. Set `MCP_ISSUER_SECRET`, `ADMIN_SECRET`, `PUBLIC_BASE_URL` (the `*.up.railway.app` origin after the first domain is issued).
 4. Attach a volume to `DATA_DIR` (e.g. `/data`) so buyer configs survive deploys.

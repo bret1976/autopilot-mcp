@@ -17,7 +17,9 @@ from app.config import (
     PRODUCT_NAME,
     STUDIO_NAME,
     STUDIO_WEBSITE,
+    payment_mode,
     public_base_url,
+    stripe_configured,
     stripe_payment_link,
 )
 
@@ -67,6 +69,7 @@ def _base() -> str:
 def pricing_block() -> dict[str, Any]:
     base = _base()
     payment_link = stripe_payment_link() or None
+    mode = payment_mode()
     return {
         "sku": SKU_ID,
         "product": PRODUCT_NAME,
@@ -92,15 +95,19 @@ def pricing_block() -> dict[str, Any]:
         "orders_method": "POST",
         "orders_body": {"name": "string", "email": "string", "source": "agent"},
         "stripe_payment_link": payment_link,
-        "payment_collection": (
-            "stripe_payment_link"
-            if payment_link
-            else "license_mint_then_invoice_or_manual"
+        "stripe_configured": stripe_configured(),
+        "payment_mode": mode,
+        "payment_collection": mode,
+        "admin_bypass": (
+            "X-Admin-Secret header or JSON/form admin_secret matching ADMIN_SECRET "
+            "fulfills immediately (Bret-mediated sales)."
         ),
+        "webhook": f"{base}/api/stripe/webhook",
         "agent_note": (
             "List price is $997 once. Do not invent discounts. "
-            "POST /api/orders mints a private mcp_url. Collect payment per studio policy "
-            "before treating a mint as a paid sale when no Stripe keys are configured."
+            "Public POST /api/orders does not mint until Stripe Checkout completes "
+            f"(payment_mode={mode}). Admin secret bypass mints immediately. "
+            "When Stripe is unset, public callers get 503 and must use admin mint."
         ),
         "terms": f"{base}/agent-terms.md",
     }
@@ -128,10 +135,11 @@ This file is for AI agents and automated purchasers. Human buy page: {base}/buy
 ## How an agent buys
 
 1. Discover this file (`/llms.txt`), `/api/pricing`, OpenAPI, and the MCP Server Card.
-2. Purchase or mint a license:
-   - Human: `{base}/buy`
+2. Purchase a license (card gate):
+   - Human: `{base}/buy` → Stripe Checkout → `/buy/thanks`
    - Agent JSON: `POST {base}/api/orders` with `{{"name","email","source":"agent"}}` and `Accept: application/json`
-   - Response includes `mcp_url`, `sku`, `price_usd`, `instructions`, and host connect snippets.
+   - Public response is `payment_required` + `checkout_url` (no mcp_url until paid).
+   - After Checkout, webhook or `/buy/thanks` mints; admin may mint with `X-Admin-Secret`.
 3. Connect MCP at the returned path URL: `{base}/mcp/t/{{LICENSE_TOKEN}}` (also `Authorization: Bearer {{LICENSE_TOKEN}}`).
 4. Call tools starting with `onboard` → `setup` → social connect → `run_autopilot(draft=true)`.
 
@@ -165,7 +173,7 @@ This file is for AI agents and automated purchasers. Human buy page: {base}/buy
 - ${PRICE_USD} once per license (`{pricing["currency"]}`, one_time)
 - Metered overage is not enabled; one license unlocks the tool surface
 - Do not invent ARR/MRR or discounts; treat sales figures as unknown unless Bret publishes them
-- Payment collection mode: `{pricing["payment_collection"]}`
+- Payment mode: `{pricing["payment_mode"]}` (collection alias: `{pricing["payment_collection"]}`)
 
 ## Capabilities
 
@@ -187,7 +195,7 @@ def agent_terms_md() -> str:
 ## Automated purchasing
 
 - Automated agents may discover this product via `/llms.txt`, `/api/pricing`, OpenAPI, and the MCP Server Card.
-- License minting via `POST /api/orders` issues a private MCP URL. Treat that URL as a secret credential.
+- Public `POST /api/orders` starts Stripe Checkout (or returns 503 if unset). MCP URL is minted only after paid Checkout or admin secret. Treat mcp_url as a secret credential.
 - List price is ${PRICE_USD} once (SKU `{SKU_ID}`). Do not assume a discount for agent buyers.
 - Do not share one license across unrelated tenants without a platform agreement.
 
@@ -252,6 +260,7 @@ def server_card() -> dict[str, Any]:
             "orders_api": f"{base}/api/orders",
             "pricing_api": f"{base}/api/pricing",
             "terms": f"{base}/agent-terms.md",
+            "payment_mode": pricing["payment_mode"],
             "payment_collection": pricing["payment_collection"],
         },
         "transport": {
@@ -335,6 +344,59 @@ Disallow: /media/
 """
 
 
+
+def payment_required_payload(*, checkout_url: str, buyer_id: str = "") -> dict[str, Any]:
+    """Agent JSON when Checkout is required (no token yet)."""
+    pricing = pricing_block()
+    return {
+        "ok": False,
+        "payment_required": True,
+        "checkout_url": checkout_url,
+        "price_usd": PRICE_USD,
+        "price": PRICE_USD,
+        "price_label": PRICE_LABEL,
+        "currency": SKU_CURRENCY,
+        "sku": SKU_ID,
+        "product": PRODUCT_NAME,
+        "buyer_id": buyer_id or None,
+        "payment_mode": pricing["payment_mode"],
+        "payment_collection": pricing["payment_collection"],
+        "message": (
+            f"Pay ${PRICE_USD} via Stripe Checkout, then the license is minted. "
+            "Do not expect mcp_url until payment completes."
+        ),
+        "instructions": {
+            "next": "Open checkout_url, complete payment, then use /buy/thanks or wait for webhook mint.",
+            "docs": f"{_base()}/llms.txt",
+            "pricing": f"{_base()}/api/pricing",
+            "admin_bypass": pricing["admin_bypass"],
+        },
+    }
+
+
+def checkout_not_configured_payload() -> dict[str, Any]:
+    pricing = pricing_block()
+    return {
+        "ok": False,
+        "payment_required": True,
+        "checkout_url": None,
+        "price_usd": PRICE_USD,
+        "price": PRICE_USD,
+        "sku": SKU_ID,
+        "payment_mode": pricing["payment_mode"],
+        "payment_collection": pricing["payment_collection"],
+        "error": "card_checkout_not_configured",
+        "message": (
+            "Card checkout is not configured (STRIPE_SECRET_KEY missing). "
+            "Public callers cannot mint. Bret-mediated sales: POST with "
+            "X-Admin-Secret or admin_secret after collecting payment offline."
+        ),
+        "admin_bypass": pricing["admin_bypass"],
+        "buy_url": pricing["buy_url"],
+        "terms": pricing["terms"],
+    }
+
+
 def order_agent_payload(fulfilled: dict[str, Any]) -> dict[str, Any]:
     """Enrich POST /api/orders JSON for agents without changing buy HTML."""
     base = _base()
@@ -354,6 +416,7 @@ def order_agent_payload(fulfilled: dict[str, Any]) -> dict[str, Any]:
         "license_days": fulfilled.get("days", LICENSE_DAYS),
         "days": fulfilled.get("days", LICENSE_DAYS),
         "payment_status": "license_issued",
+        "payment_mode": pricing["payment_mode"],
         "payment_collection": pricing["payment_collection"],
         "url": url,
         "mcp_url": url,

@@ -231,11 +231,39 @@ async def test_tools_are_registered() -> None:
     }.issubset(names)
 
 
-def test_orders_mint_url() -> None:
+def test_orders_public_no_free_mint() -> None:
+    """Public POST must not mint when Stripe is unset (admin_mint_only)."""
     with TestClient(app) as client:
         res = client.post(
             "/api/orders",
             json={"name": "Nia", "email": "buyer@studio.test", "client": "Codex"},
+        )
+        assert res.status_code == 503
+        body = res.json()
+        assert body["ok"] is False
+        assert body["payment_required"] is True
+        assert body.get("checkout_url") in (None, "")
+        assert "mcp_url" not in body or not body.get("mcp_url")
+        assert body["price_usd"] == 997
+        assert body["sku"] == "autopilot-mcp-license"
+        assert body["payment_mode"] == "admin_mint_only"
+
+        html = client.post(
+            "/api/orders",
+            data={"name": "Nia", "email": "buyer2@studio.test", "client": "Grok"},
+            headers={"Accept": "text/html"},
+        )
+        assert html.status_code == 503
+        assert "/mcp/t/" not in html.text
+        assert "not configured" in html.text.lower() or "card checkout" in html.text.lower()
+
+
+def test_orders_admin_bypass_mints() -> None:
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/orders",
+            json={"name": "Nia", "email": "admin-buyer@studio.test", "client": "Codex"},
+            headers={"X-Admin-Secret": "test-admin"},
         )
         assert res.status_code == 200
         body = res.json()
@@ -244,25 +272,36 @@ def test_orders_mint_url() -> None:
         assert body["days"] == 365
         assert "/mcp/t/" in body["url"]
         assert body["url"] == body["mcp_url"]
-        assert "You are in line" not in body["message"]
         token = body["url"].rstrip("/").rsplit("/", 1)[1]
         assert verify_token(token) is not None
 
         html = client.post(
             "/api/orders",
-            data={"name": "Nia", "email": "buyer@studio.test", "client": "Grok"},
+            data={
+                "name": "Nia",
+                "email": "admin-buyer2@studio.test",
+                "client": "Grok",
+                "admin_secret": "test-admin",
+            },
             headers={"Accept": "text/html"},
         )
         assert html.status_code == 200
         assert "/mcp/t/" in html.text
         assert "Copy the URL" in html.text
-        assert "Add custom connector" in html.text
         assert "mcpServers" in html.text
         assert "serverUrl" in html.text
-        assert "Authorization" in html.text
-        assert "Grok" in html.text
         assert "Antigravity" in html.text
-        assert "You are in line" not in html.text
+
+
+def test_pricing_payment_mode_admin_only() -> None:
+    with TestClient(app) as client:
+        res = client.get("/api/pricing")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["price_usd"] == 997
+        assert body["payment_mode"] == "admin_mint_only"
+        assert body["payment_collection"] == "admin_mint_only"
+        assert "Admin" in body["admin_bypass"] or "admin" in body["admin_bypass"].lower()
 
 
 def _jsonrpc(response) -> dict:

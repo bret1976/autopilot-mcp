@@ -141,3 +141,22 @@ def ytdlp_cookies_file() -> Path | None:
         return dest
     except Exception:  # noqa: BLE001
         return None
+
+
+def stripe_webhook_secret() -> str:
+    return _env("STRIPE_WEBHOOK_SECRET")
+
+
+def stripe_price_id() -> str:
+    return _env("STRIPE_PRICE_ID")
+
+
+def stripe_configured() -> bool:
+    return bool(stripe_secret_key())
+
+
+def payment_mode() -> str:
+    """Public payment gate mode for agents."""
+    if stripe_configured():
+        return "stripe_checkout_then_mint"
+    return "admin_mint_only"

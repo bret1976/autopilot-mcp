@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import os
 import re
 from contextlib import asynccontextmanager, suppress
@@ -27,7 +28,9 @@ from app.config import (
     THEORY_VIDEO_URL,
     admin_secret,
     data_dir,
+    payment_mode,
     public_base_url,
+    stripe_configured,
     stripe_payment_link,
 )
 from app.http_util import (
@@ -47,10 +50,19 @@ from app.media import buyer_media_dir, verify_media
 from app.oauth import router as oauth_router, www_authenticate
 from app.agent_discovery import (
     AgentDiscoveryHeadersMiddleware,
+    checkout_not_configured_payload,
     order_agent_payload,
+    payment_required_payload,
     router as agent_discovery_router,
 )
 from app.orders import fulfill_order
+from app.stripe_checkout import (
+    construct_webhook_event,
+    create_checkout_session,
+    metadata_from_session,
+    retrieve_checkout_session,
+    session_is_paid,
+)
 from app.proof import load_proof, proof_dir, render_proof_html
 from app.store import ensure_buyer, list_buyers, list_leads
 from app.tokens import clean_buyer_id, mint_token
@@ -142,6 +154,21 @@ def _ctx(request: Request, **extra):
     }
 
 
+
+def _admin_bypass(request: Request, body: dict) -> bool:
+    """Bret-mediated mint: X-Admin-Secret or body admin_secret."""
+    expected = admin_secret()
+    if not expected:
+        return False
+    header = (request.headers.get("x-admin-secret") or "").strip()
+    body_secret = str(body.get("admin_secret") or "").strip()
+    if header and hmac.compare_digest(header, expected):
+        return True
+    if body_secret and hmac.compare_digest(body_secret, expected):
+        return True
+    return False
+
+
 def _wants_html(request: Request) -> bool:
     accept = request.headers.get("accept", "")
     content = request.headers.get("content-type", "")
@@ -199,28 +226,100 @@ async def create_order(request: Request):
         raise HTTPException(status_code=400, detail="A name is required.")
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="A real email is required.")
-    fulfilled = fulfill_order(
-        name=name,
-        email=email,
-        client=str(body.get("client") or "").strip(),
-        studio=str(body.get("studio") or "").strip(),
-        source=str(body.get("source") or "buy"),
-        request=request,
-    )
-    if _wants_html(request):
-        return templates.TemplateResponse(
-            request,
-            "buy.html",
-            _ctx(
-                request,
-                submitted=True,
-                order=fulfilled["order"],
-                mcp_url=fulfilled["url"],
-                mcp_token=fulfilled["token"],
-                payment_link=stripe_payment_link() or None,
-            ),
+    client = str(body.get("client") or "").strip()
+    studio = str(body.get("studio") or "").strip()
+    source = str(body.get("source") or "buy").strip() or "buy"
+    wants_html = _wants_html(request)
+
+    # Bret-mediated sales: admin secret mints immediately (no card).
+    if _admin_bypass(request, body):
+        fulfilled = fulfill_order(
+            name=name,
+            email=email,
+            client=client,
+            studio=studio,
+            source=f"admin:{source}",
+            request=request,
         )
-    return order_agent_payload(fulfilled)
+        if wants_html:
+            return templates.TemplateResponse(
+                request,
+                "buy.html",
+                _ctx(
+                    request,
+                    submitted=True,
+                    order=fulfilled["order"],
+                    mcp_url=fulfilled["url"],
+                    mcp_token=fulfilled["token"],
+                    payment_link=stripe_payment_link() or None,
+                ),
+            )
+        return order_agent_payload(fulfilled)
+
+    if not stripe_configured():
+        payload = checkout_not_configured_payload()
+        if wants_html:
+            return templates.TemplateResponse(
+                request,
+                "buy.html",
+                _ctx(
+                    request,
+                    submitted=False,
+                    error=payload["message"],
+                    payment_link=stripe_payment_link() or None,
+                    payment_mode=payment_mode(),
+                ),
+                status_code=503,
+            )
+        return JSONResponse(payload, status_code=503)
+
+    try:
+        session = create_checkout_session(
+            name=name,
+            email=email,
+            client=client,
+            studio=studio,
+            source=source,
+            request=request,
+        )
+    except Exception as exc:  # noqa: BLE001
+        detail = f"Stripe Checkout could not be started: {exc}"
+        if wants_html:
+            return templates.TemplateResponse(
+                request,
+                "buy.html",
+                _ctx(
+                    request,
+                    submitted=False,
+                    error=detail,
+                    payment_link=stripe_payment_link() or None,
+                    payment_mode=payment_mode(),
+                ),
+                status_code=503,
+            )
+        return JSONResponse(
+            {
+                "ok": False,
+                "payment_required": True,
+                "error": "checkout_create_failed",
+                "message": detail,
+                "price_usd": PRICE_USD,
+                "sku": "autopilot-mcp-license",
+                "payment_mode": payment_mode(),
+            },
+            status_code=503,
+        )
+
+    checkout_url = session["checkout_url"]
+    if wants_html:
+        return RedirectResponse(checkout_url, status_code=303)
+    return JSONResponse(
+        payment_required_payload(
+            checkout_url=checkout_url,
+            buyer_id=session.get("buyer_id") or "",
+        ),
+        status_code=402,
+    )
 
 
 @app.post("/api/leads")
@@ -338,8 +437,110 @@ async def media(buyer_id: str, filename: str, sig: str = ""):
 
 
 @app.get("/buy/thanks", response_class=HTMLResponse)
-async def buy_thanks():
-    return RedirectResponse("/buy")
+async def buy_thanks(request: Request, session_id: str | None = Query(default=None)):
+    """After Stripe Checkout — show mcp_url only when session is paid."""
+    if not session_id:
+        return RedirectResponse("/buy", status_code=303)
+    if not stripe_configured():
+        return templates.TemplateResponse(
+            request,
+            "buy.html",
+            _ctx(
+                request,
+                submitted=False,
+                error="Card checkout is not configured; contact the studio for access.",
+                payment_link=stripe_payment_link() or None,
+            ),
+            status_code=503,
+        )
+    try:
+        session = retrieve_checkout_session(session_id)
+    except Exception as exc:  # noqa: BLE001
+        return templates.TemplateResponse(
+            request,
+            "buy.html",
+            _ctx(
+                request,
+                submitted=False,
+                error=f"Could not verify checkout session: {exc}",
+                payment_link=stripe_payment_link() or None,
+            ),
+            status_code=400,
+        )
+    if not session_is_paid(session):
+        return templates.TemplateResponse(
+            request,
+            "buy.html",
+            _ctx(
+                request,
+                submitted=False,
+                error="Payment is not complete yet. Finish Checkout, then refresh this page.",
+                payment_link=stripe_payment_link() or None,
+            ),
+            status_code=402,
+        )
+    meta = metadata_from_session(session)
+    email = (meta.get("email") or getattr(session, "customer_email", None) or "").strip()
+    name = (meta.get("name") or email or "Buyer").strip()
+    if not email or "@" not in email:
+        return templates.TemplateResponse(
+            request,
+            "buy.html",
+            _ctx(
+                request,
+                submitted=False,
+                error="Paid session is missing buyer email metadata.",
+                payment_link=stripe_payment_link() or None,
+            ),
+            status_code=400,
+        )
+    fulfilled = fulfill_order(
+        name=name,
+        email=email,
+        client=meta.get("client") or "",
+        studio=meta.get("studio") or "",
+        source=meta.get("source") or "stripe",
+        request=request,
+    )
+    return templates.TemplateResponse(
+        request,
+        "buy.html",
+        _ctx(
+            request,
+            submitted=True,
+            order=fulfilled["order"],
+            mcp_url=fulfilled["url"],
+            mcp_token=fulfilled["token"],
+            payment_link=stripe_payment_link() or None,
+        ),
+    )
+
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request):
+    """Verify Stripe signature; mint on checkout.session.completed."""
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature")
+    try:
+        event = construct_webhook_event(payload, signature)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Webhook verify failed: {exc}") from exc
+    etype = event["type"] if isinstance(event, dict) else event.type
+    data = event["data"]["object"] if isinstance(event, dict) else event.data.object
+    if etype == "checkout.session.completed":
+        meta = metadata_from_session(data)
+        email = (meta.get("email") or getattr(data, "customer_email", None) or "").strip()
+        name = (meta.get("name") or email or "Buyer").strip()
+        if email and "@" in email:
+            fulfill_order(
+                name=name,
+                email=email,
+                client=meta.get("client") or "",
+                studio=meta.get("studio") or "",
+                source=meta.get("source") or "stripe_webhook",
+                request=request,
+            )
+    return {"ok": True, "received": True, "type": etype}
 
 
 @app.get("/promo.mp4")
@@ -386,11 +587,13 @@ def custom_openapi():
     paths = schema.setdefault("paths", {})
     orders = paths.get("/api/orders", {}).get("post")
     if orders is not None:
-        orders["summary"] = "Mint a licensed MCP URL (agent-friendly JSON)"
+        orders["summary"] = "Start Stripe Checkout or admin-mint a licensed MCP URL"
         orders["description"] = (
             "POST JSON {name, email, source?} with Accept: application/json. "
-            "Returns mcp_url, sku, price_usd=$997, instructions, and host connect snippets. "
-            "HTML form posts from /buy produce the human buy page (unchanged)."
+            "Public callers get payment_required + checkout_url (402) when Stripe is configured; "
+            "mcp_url is minted only after Checkout (webhook or /buy/thanks). "
+            "X-Admin-Secret or admin_secret fulfills immediately. "
+            "Without STRIPE_SECRET_KEY, public callers get 503 (admin mint only)."
         )
         orders["requestBody"] = {
             "required": True,
@@ -412,7 +615,7 @@ def custom_openapi():
         }
         orders["responses"] = {
             "200": {
-                "description": "License minted",
+                "description": "License minted (admin bypass only)",
                 "content": {
                     "application/json": {
                         "schema": {
@@ -431,7 +634,25 @@ def custom_openapi():
                     }
                 },
             },
+            "402": {
+                "description": "Payment required — Stripe Checkout URL returned",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "ok": {"type": "boolean"},
+                                "payment_required": {"type": "boolean"},
+                                "checkout_url": {"type": "string"},
+                                "price_usd": {"type": "integer"},
+                                "sku": {"type": "string"},
+                            },
+                        }
+                    }
+                },
+            },
             "400": {"description": "Missing name or email"},
+            "503": {"description": "Card checkout not configured (admin mint only)"},
         }
     pricing = paths.get("/api/pricing", {}).get("get")
     if pricing is not None:

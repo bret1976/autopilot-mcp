@@ -77,6 +77,8 @@
         });
       }
     </script>
+    {% elif error %}
+    <div class="card"><p class="fine">{{ error }}</p><p class="fine"><a href="/buy">Back to buy</a></p></div>
     {% else %}
     <form class="card" method="post" action="/api/orders">
       <label for="name">Name</label>

@@ -334,6 +334,68 @@ async def create_lead_alias(request: Request):
     return await create_order(request)
 
 
+@app.get("/api/orders/checkout")
+async def checkout_redirect(session_id: str | None = Query(default=None)):
+    """Redirect to Stripe's complete Checkout URL without touching its fragment."""
+    if not session_id or not re.fullmatch(r"cs_(?:test|live)_[A-Za-z0-9]+", str(session_id)):
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "invalid_session_id",
+                "message": "session_id (cs_test_... or cs_live_...) is required.",
+            },
+            status_code=400,
+        )
+    if not stripe_configured():
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "card_checkout_not_configured",
+                "session_id": session_id,
+            },
+            status_code=503,
+        )
+    try:
+        session = retrieve_checkout_session(session_id)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "checkout_session_not_found",
+                "message": str(exc),
+                "session_id": session_id,
+            },
+            status_code=404,
+        )
+
+    session_status = str(getattr(session, "status", None) or "")
+    checkout_url = getattr(session, "url", None)
+    if isinstance(session, dict):
+        session_status = str(session.get("status") or "")
+        checkout_url = session.get("url")
+    if session_status.lower() == "expired":
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "checkout_session_expired",
+                "message": "This Stripe Checkout Session has expired.",
+                "session_id": session_id,
+            },
+            status_code=410,
+        )
+    if not isinstance(checkout_url, str) or not checkout_url:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "checkout_session_unavailable",
+                "message": "This Stripe Checkout Session has no active checkout URL.",
+                "session_id": session_id,
+            },
+            status_code=410,
+        )
+    return RedirectResponse(checkout_url, status_code=302)
+
+
 @app.get("/api/orders/status")
 async def order_status(request: Request, session_id: str | None = Query(default=None)):
     """Agent poll after Checkout — JSON mcp_url once session is paid (and minted)."""
@@ -661,6 +723,7 @@ def custom_openapi():
         description=(
             f"{PRODUCT_NAME} — licensed MCP. Price {PRICE_LABEL}. "
             "Agents: GET /llms.txt, GET /api/pricing, POST /api/orders (402+checkout), "
+            "GET /api/orders/checkout?session_id= to recover Stripe Checkout, then "
             "GET /api/orders/status?session_id=, then connect /mcp/t/{token}."
         ),
         routes=app.routes,
@@ -673,7 +736,7 @@ def custom_openapi():
         orders["summary"] = "Start Stripe Checkout or admin-mint a licensed MCP URL"
         orders["description"] = (
             "POST JSON {name, email, source?} with Accept: application/json. "
-            "Public callers get payment_required + checkout_url (402) when Stripe is configured; "
+            "Public callers get payment_required + checkout_url + checkout_redirect_url (402) when Stripe is configured; "
             "mcp_url is minted only after Checkout (webhook or /buy/thanks). "
             "X-Admin-Secret or admin_secret fulfills immediately. "
             "Without STRIPE_SECRET_KEY, public callers get 503 (admin mint only)."
@@ -726,7 +789,8 @@ def custom_openapi():
                             "properties": {
                                 "ok": {"type": "boolean"},
                                 "payment_required": {"type": "boolean"},
-                                "checkout_url": {"type": "string"},
+                                "checkout_url": {"type": "string", "format": "uri"},
+                                "checkout_redirect_url": {"type": "string", "format": "uri"},
                                 "session_id": {"type": "string"},
                                 "status_url": {"type": "string"},
                                 "price_usd": {"type": "integer"},
@@ -740,6 +804,13 @@ def custom_openapi():
             "400": {"description": "Missing name or email"},
             "503": {"description": "Card checkout not configured (admin mint only)"},
         }
+    checkout = paths.get("/api/orders/checkout", {}).get("get")
+    if checkout is not None:
+        checkout["summary"] = "Recover the full Stripe Checkout URL"
+        checkout["description"] = (
+            "Retrieves the Checkout Session from Stripe and returns an exact 302 redirect "
+            "to session.url. Returns JSON 404 for missing sessions and 410 for expired sessions."
+        )
     status = paths.get("/api/orders/status", {}).get("get")
     if status is not None:
         status["summary"] = "Poll Checkout session until mcp_url is minted"

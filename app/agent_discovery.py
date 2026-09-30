@@ -96,6 +96,8 @@ def pricing_block() -> dict[str, Any]:
         "orders_body": {"name": "string", "email": "string", "source": "agent"},
         "orders_status_api": f"{base}/api/orders/status",
         "orders_status_query": {"session_id": "cs_..."},
+        "orders_checkout_api": f"{base}/api/orders/checkout",
+        "orders_checkout_query": {"session_id": "cs_test_... or cs_live_..."},
         "stripe_payment_link": payment_link,
         "stripe_configured": stripe_configured(),
         "payment_mode": mode,
@@ -140,7 +142,8 @@ This file is for AI agents and automated purchasers. Human buy page: {base}/buy
 2. Purchase a license (card gate):
    - Human: `{base}/buy` → Stripe Checkout → `/buy/thanks`
    - Agent JSON: `POST {base}/api/orders` with `{{"name","email","source":"agent"}}` and `Accept: application/json`
-   - Public response is HTTP 402 `payment_required` + `checkout_url` + `session_id` (no mcp_url until paid).
+   - Public response is HTTP 402 `payment_required` + `checkout_url` + `checkout_redirect_url` + `session_id` (no mcp_url until paid).
+   - Prefer `checkout_redirect_url` to recover the complete Stripe URL if a client truncates a hash fragment.
    - After Checkout, poll `GET /api/orders/status?session_id=...` (JSON) or `/buy/thanks`; webhook also mints. Admin may mint with `X-Admin-Secret`.
 3. Connect MCP at the returned path URL: `{base}/mcp/t/{{LICENSE_TOKEN}}` (also `Authorization: Bearer {{LICENSE_TOKEN}}`).
 4. Call tools starting with `onboard` → `setup` → social connect → `run_autopilot(draft=true)`.
@@ -205,7 +208,7 @@ def agent_terms_md() -> str:
 
 1. Discover via `/llms.txt`, `/api/pricing`, `/openapi.json`, `/.well-known/mcp/server-card.json`.
 2. `POST {base}/api/orders` with JSON `{{"name","email","source":"agent"}}` and `Accept: application/json`.
-3. Expect HTTP **402** with `payment_required`, `checkout_url`, and `session_id` when Stripe Checkout is configured.
+3. Expect HTTP **402** with `payment_required`, `checkout_url`, `checkout_redirect_url`, and `session_id` when Stripe Checkout is configured.
 4. Complete Checkout. Poll `GET {base}/api/orders/status?session_id=...` (or `/buy/thanks?session_id=...` with `Accept: application/json`) until `mcp_url` is returned. Webhook mint is automatic.
 5. Connect MCP at `mcp_url` (`/mcp/t/{{LICENSE_TOKEN}}`). Treat the URL/token as a secret.
 
@@ -384,12 +387,15 @@ def payment_required_payload(
     pricing = pricing_block()
     base = _base()
     status_url = f"{base}/api/orders/status"
+    checkout_redirect_url = f"{base}/api/orders/checkout"
     if session_id:
-        status_url = f"{base}/api/orders/status?session_id={session_id}"
+        status_url = f"{status_url}?session_id={session_id}"
+        checkout_redirect_url = f"{checkout_redirect_url}?session_id={session_id}"
     return {
         "ok": False,
         "payment_required": True,
         "checkout_url": checkout_url,
+        "checkout_redirect_url": checkout_redirect_url,
         "session_id": session_id or None,
         "status_url": status_url,
         "price_usd": PRICE_USD,
@@ -407,7 +413,7 @@ def payment_required_payload(
         ),
         "instructions": {
             "next": (
-                "Open checkout_url and complete payment. Then GET status_url "
+                "Open checkout_redirect_url (or checkout_url) and complete payment. Then GET status_url "
                 "(or /buy/thanks?session_id=...) with Accept: application/json to receive mcp_url. "
                 "Webhook also mints automatically."
             ),

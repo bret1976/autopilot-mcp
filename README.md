@@ -19,7 +19,8 @@ Owner: Bret Jenny / 6Frame Studio.
 Machine discovery (no buy-UI change):
 
 - `/llms.txt`, `/api/pricing`, `/openapi.json`, `/.well-known/mcp/server-card.json`, `/.well-known/agent.json`, `/agent-terms.md`
-- `POST /api/orders` → HTTP **402** + `checkout_url` + `session_id` when `STRIPE_SECRET_KEY` is set
+- `POST /api/orders` → HTTP **402** + `checkout_url` + `checkout_redirect_url` + `session_id` when `STRIPE_SECRET_KEY` is set
+- `GET /api/orders/checkout?session_id=cs_test_...` → 302 to the full Stripe Checkout URL (fragment-safe)
 - `GET /api/orders/status?session_id=cs_...` → `mcp_url` after paid
 - Price stays **$997 once** (`PRICE_USD` in `app/config.py`)
 

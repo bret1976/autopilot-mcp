@@ -48,6 +48,39 @@ def test_orders_stripe_checkout_required(monkeypatch) -> None:
                         assert html.headers["location"] == fake["checkout_url"]
 
 
+def test_checkout_redirect_preserves_full_stripe_url(monkeypatch) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    full_url = "https://checkout.stripe.com/c/pay/cs_test_123#frag=long_fragment_value"
+    session = SimpleNamespace(id="cs_test_123", status="open", url=full_url)
+    with patch("app.main.stripe_configured", return_value=True):
+        with patch("app.main.retrieve_checkout_session", return_value=session):
+            with TestClient(app) as client:
+                res = client.get(
+                    "/api/orders/checkout",
+                    params={"session_id": "cs_test_123"},
+                    follow_redirects=False,
+                )
+                assert res.status_code == 302
+                assert res.headers["location"] == full_url
+
+
+def test_checkout_redirect_returns_json_for_missing_or_expired(monkeypatch) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    with patch("app.main.stripe_configured", return_value=True):
+        with patch("app.main.retrieve_checkout_session", side_effect=LookupError("missing")):
+            with TestClient(app) as client:
+                missing = client.get("/api/orders/checkout?session_id=cs_test_missing")
+                assert missing.status_code == 404
+                assert missing.json()["error"] == "checkout_session_not_found"
+
+        expired = SimpleNamespace(id="cs_test_expired", status="expired", url=None)
+        with patch("app.main.retrieve_checkout_session", return_value=expired):
+            with TestClient(app) as client:
+                res = client.get("/api/orders/checkout?session_id=cs_test_expired")
+                assert res.status_code == 410
+                assert res.json()["error"] == "checkout_session_expired"
+
+
 def test_thanks_fulfills_when_paid(monkeypatch) -> None:
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
     session = SimpleNamespace(

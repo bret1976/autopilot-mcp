@@ -201,6 +201,12 @@ async def landing(request: Request):
     return templates.TemplateResponse(request, "index.html", _ctx(request))
 
 
+@app.head("/")
+async def landing_head():
+    """Agents/probes often HEAD the origin; return 200 + discovery Link headers."""
+    return JSONResponse(content=None, status_code=200)
+
+
 @app.get("/buy", response_class=HTMLResponse)
 async def buy(request: Request):
     return templates.TemplateResponse(
@@ -317,6 +323,7 @@ async def create_order(request: Request):
         payment_required_payload(
             checkout_url=checkout_url,
             buyer_id=session.get("buyer_id") or "",
+            session_id=session.get("session_id") or "",
         ),
         status_code=402,
     )
@@ -325,6 +332,75 @@ async def create_order(request: Request):
 @app.post("/api/leads")
 async def create_lead_alias(request: Request):
     return await create_order(request)
+
+
+@app.get("/api/orders/status")
+async def order_status(request: Request, session_id: str | None = Query(default=None)):
+    """Agent poll after Checkout — JSON mcp_url once session is paid (and minted)."""
+    if not session_id or not str(session_id).startswith("cs_"):
+        raise HTTPException(status_code=400, detail="session_id (cs_...) is required.")
+    if not stripe_configured():
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "card_checkout_not_configured",
+                "payment_mode": payment_mode(),
+                "session_id": session_id,
+            },
+            status_code=503,
+        )
+    try:
+        session = retrieve_checkout_session(session_id)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "session_lookup_failed",
+                "message": str(exc),
+                "session_id": session_id,
+            },
+            status_code=400,
+        )
+    paid = session_is_paid(session)
+    meta = metadata_from_session(session)
+    email = (meta.get("email") or getattr(session, "customer_email", None) or "").strip()
+    if not paid:
+        return {
+            "ok": True,
+            "payment_status": str(
+                getattr(session, "payment_status", None) or session.get("payment_status") or "unpaid"
+            ),
+            "session_status": str(getattr(session, "status", None) or session.get("status") or ""),
+            "session_id": session_id,
+            "buyer_id": meta.get("buyer_id") or None,
+            "mcp_url": None,
+            "payment_required": True,
+            "price_usd": PRICE_USD,
+            "sku": "autopilot-mcp-license",
+            "message": "Payment not complete yet. Finish Checkout, then poll again.",
+        }
+    if not email or "@" not in email:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "missing_buyer_email",
+                "session_id": session_id,
+                "payment_status": "paid",
+            },
+            status_code=400,
+        )
+    fulfilled = fulfill_order(
+        name=(meta.get("name") or email or "Buyer").strip(),
+        email=email,
+        client=meta.get("client") or "",
+        studio=meta.get("studio") or "",
+        source=meta.get("source") or "stripe_status",
+        request=request,
+    )
+    payload = order_agent_payload(fulfilled)
+    payload["payment_status"] = "paid"
+    payload["session_id"] = session_id
+    return payload
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -502,6 +578,12 @@ async def buy_thanks(request: Request, session_id: str | None = Query(default=No
         source=meta.get("source") or "stripe",
         request=request,
     )
+    accept = (request.headers.get("accept") or "").lower()
+    if "application/json" in accept and "text/html" not in accept:
+        payload = order_agent_payload(fulfilled)
+        payload["payment_status"] = "paid"
+        payload["session_id"] = session_id
+        return JSONResponse(payload)
     return templates.TemplateResponse(
         request,
         "buy.html",
@@ -575,10 +657,11 @@ def custom_openapi():
 
     schema = get_openapi(
         title=app.title,
-        version="0.1.1",
+        version="0.1.2",
         description=(
             f"{PRODUCT_NAME} — licensed MCP. Price {PRICE_LABEL}. "
-            "Agents: GET /llms.txt, GET /api/pricing, POST /api/orders, then connect /mcp/t/{token}."
+            "Agents: GET /llms.txt, GET /api/pricing, POST /api/orders (402+checkout), "
+            "GET /api/orders/status?session_id=, then connect /mcp/t/{token}."
         ),
         routes=app.routes,
     )
@@ -635,7 +718,7 @@ def custom_openapi():
                 },
             },
             "402": {
-                "description": "Payment required — Stripe Checkout URL returned",
+                "description": "Payment required — Stripe Checkout URL + session_id",
                 "content": {
                     "application/json": {
                         "schema": {
@@ -644,8 +727,11 @@ def custom_openapi():
                                 "ok": {"type": "boolean"},
                                 "payment_required": {"type": "boolean"},
                                 "checkout_url": {"type": "string"},
+                                "session_id": {"type": "string"},
+                                "status_url": {"type": "string"},
                                 "price_usd": {"type": "integer"},
                                 "sku": {"type": "string"},
+                                "payment_mode": {"type": "string"},
                             },
                         }
                     }
@@ -654,6 +740,12 @@ def custom_openapi():
             "400": {"description": "Missing name or email"},
             "503": {"description": "Card checkout not configured (admin mint only)"},
         }
+    status = paths.get("/api/orders/status", {}).get("get")
+    if status is not None:
+        status["summary"] = "Poll Checkout session until mcp_url is minted"
+        status["description"] = (
+            "GET ?session_id=cs_... after Stripe Checkout. Returns mcp_url when payment_status=paid."
+        )
     pricing = paths.get("/api/pricing", {}).get("get")
     if pricing is not None:
         pricing["summary"] = "Machine-readable $997 one-time SKU"

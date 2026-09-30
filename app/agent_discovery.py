@@ -94,6 +94,8 @@ def pricing_block() -> dict[str, Any]:
         "orders_api": f"{base}/api/orders",
         "orders_method": "POST",
         "orders_body": {"name": "string", "email": "string", "source": "agent"},
+        "orders_status_api": f"{base}/api/orders/status",
+        "orders_status_query": {"session_id": "cs_..."},
         "stripe_payment_link": payment_link,
         "stripe_configured": stripe_configured(),
         "payment_mode": mode,
@@ -138,8 +140,8 @@ This file is for AI agents and automated purchasers. Human buy page: {base}/buy
 2. Purchase a license (card gate):
    - Human: `{base}/buy` → Stripe Checkout → `/buy/thanks`
    - Agent JSON: `POST {base}/api/orders` with `{{"name","email","source":"agent"}}` and `Accept: application/json`
-   - Public response is `payment_required` + `checkout_url` (no mcp_url until paid).
-   - After Checkout, webhook or `/buy/thanks` mints; admin may mint with `X-Admin-Secret`.
+   - Public response is HTTP 402 `payment_required` + `checkout_url` + `session_id` (no mcp_url until paid).
+   - After Checkout, poll `GET /api/orders/status?session_id=...` (JSON) or `/buy/thanks`; webhook also mints. Admin may mint with `X-Admin-Secret`.
 3. Connect MCP at the returned path URL: `{base}/mcp/t/{{LICENSE_TOKEN}}` (also `Authorization: Bearer {{LICENSE_TOKEN}}`).
 4. Call tools starting with `onboard` → `setup` → social connect → `run_autopilot(draft=true)`.
 
@@ -188,44 +190,71 @@ This file is for AI agents and automated purchasers. Human buy page: {base}/buy
 
 def agent_terms_md() -> str:
     base = _base()
-    return f"""# {PRODUCT_NAME} — Agent / Automated Purchaser Terms (stub)
+    return f"""# {PRODUCT_NAME} — Agent / Automated Purchaser Terms
 
-**Status:** Draft stub for agent discovery. Bret Jenny / counsel own the final legal text.
+**Effective for automated purchasers and AI agents.** Human sales remain governed by {STUDIO_NAME} policy at {STUDIO_WEBSITE}. Counsel may update this text; agents must re-fetch `/agent-terms.md` before purchase.
 
-## Automated purchasing
+## Product and price
 
-- Automated agents may discover this product via `/llms.txt`, `/api/pricing`, OpenAPI, and the MCP Server Card.
-- Public `POST /api/orders` starts Stripe Checkout (or returns 503 if unset). MCP URL is minted only after paid Checkout or admin secret. Treat mcp_url as a secret credential.
-- List price is ${PRICE_USD} once (SKU `{SKU_ID}`). Do not assume a discount for agent buyers.
-- Do not share one license across unrelated tenants without a platform agreement.
+- SKU: `{SKU_ID}` — one commercial license for the TrendPilot / {PRODUCT_NAME} MCP tool surface.
+- List price: **${PRICE_USD} USD once** (no agent discount unless Bret Jenny publishes one).
+- License term on mint: {LICENSE_DAYS} days from issuance (renewal/re-mint requires a new paid order or admin reissue).
+- Buyer supplies their own Gemini API key and PostProxy credentials; those spends are not included.
+
+## How agents buy
+
+1. Discover via `/llms.txt`, `/api/pricing`, `/openapi.json`, `/.well-known/mcp/server-card.json`.
+2. `POST {base}/api/orders` with JSON `{{"name","email","source":"agent"}}` and `Accept: application/json`.
+3. Expect HTTP **402** with `payment_required`, `checkout_url`, and `session_id` when Stripe Checkout is configured.
+4. Complete Checkout. Poll `GET {base}/api/orders/status?session_id=...` (or `/buy/thanks?session_id=...` with `Accept: application/json`) until `mcp_url` is returned. Webhook mint is automatic.
+5. Connect MCP at `mcp_url` (`/mcp/t/{{LICENSE_TOKEN}}`). Treat the URL/token as a secret.
+
+Admin `X-Admin-Secret` / `admin_secret` mints immediately for Bret-mediated offline collection only.
 
 ## Allowed use
 
-- Run the Autopilot spine for the licensed buyer brand using that buyer’s own Gemini and PostProxy credentials.
+- Operate Autopilot for the **licensed buyer brand** only, using that buyer’s Gemini + PostProxy keys.
 - Prefer `run_autopilot(draft=true)` before live publish.
-- Respect platform rules of Instagram, TikTok, YouTube, Facebook, LinkedIn, and X.
+- Obey Instagram, TikTok, YouTube, Facebook, LinkedIn, and X platform rules and applicable law.
+- One license per tenant unless a written platform agreement says otherwise.
 
 ## Prohibited
 
-- Reselling or publishing license URLs
-- Scraping or exfiltrating other buyers’ data from shared infrastructure
-- Using the product to post prohibited, deceptive, or copyright-violating content
-- Circumventing rate limits or health checks
+- Reselling, publishing, or sharing license URLs / tokens
+- Accessing or exfiltrating other buyers’ data, media, or keys
+- Posting prohibited, deceptive, infringing, or malware content
+- Circumventing auth, revocation (`REVOKED_KEYS`), or health checks
+- Inventing discounts, free mints, or unpaid mcp_url issuance
+
+## Payment, minting, and revocation
+
+- Public mint requires a **paid** Stripe Checkout session (or admin bypass).
+- Re-POST `/api/orders` for the same email starts a new Checkout; after paid, fulfill is idempotent (same buyer keeps a usable token).
+- {STUDIO_NAME} may revoke a license via `REVOKED_KEYS` (buyer_id or full token) for abuse, chargeback, or breach.
+- Chargebacks / unpaid disputes may result in immediate revoke.
 
 ## Refunds
 
-- Metered usage after a successful job is generally non-refundable.
-- License refunds follow the studio’s human sales policy (not defined in this stub).
+- Card payments follow Stripe + studio refund practice.
+- After a successful live publish job, license fees are generally non-refundable.
+- Gemini/PostProxy spend is never refunded by {STUDIO_NAME}.
 
-## Data
+## Data and secrets
 
-- Uploaded media and buyer keys are stored for Autopilot operation under `{base}`.
-- Retention and deletion requests: contact {STUDIO_NAME} via {STUDIO_WEBSITE}.
+- Buyer keys and media are stored under the service data volume for Autopilot operation (`{base}`).
+- Tools never echo stored API secrets.
+- Deletion / export requests: contact {OWNER_NAME} via {STUDIO_WEBSITE}.
 
-## Contact for disputes
+## Disclaimer
+
+- Software is provided as a commercial workflow product; uptime and third-party APIs (Gemini, PostProxy, social networks, YouTube download) can fail.
+- Agents must not claim {STUDIO_NAME} guarantees viral performance or platform approval.
+
+## Contact / disputes
 
 - {OWNER_NAME} / {STUDIO_NAME} — {STUDIO_WEBSITE}
-- Live product: {base}
+- Live: {base}
+- Pricing: {base}/api/pricing
 """
 
 
@@ -239,7 +268,7 @@ def server_card() -> dict[str, Any]:
             f"Scan a viral original, trim, write copy, publish via PostProxy. "
             f"{PRICE_LABEL}."
         ),
-        "version": "0.1.1",
+        "version": "0.1.2",
         "vendor": {
             "name": STUDIO_NAME,
             "url": STUDIO_WEBSITE,
@@ -345,13 +374,24 @@ Disallow: /media/
 
 
 
-def payment_required_payload(*, checkout_url: str, buyer_id: str = "") -> dict[str, Any]:
+def payment_required_payload(
+    *,
+    checkout_url: str,
+    buyer_id: str = "",
+    session_id: str = "",
+) -> dict[str, Any]:
     """Agent JSON when Checkout is required (no token yet)."""
     pricing = pricing_block()
+    base = _base()
+    status_url = f"{base}/api/orders/status"
+    if session_id:
+        status_url = f"{base}/api/orders/status?session_id={session_id}"
     return {
         "ok": False,
         "payment_required": True,
         "checkout_url": checkout_url,
+        "session_id": session_id or None,
+        "status_url": status_url,
         "price_usd": PRICE_USD,
         "price": PRICE_USD,
         "price_label": PRICE_LABEL,
@@ -366,9 +406,14 @@ def payment_required_payload(*, checkout_url: str, buyer_id: str = "") -> dict[s
             "Do not expect mcp_url until payment completes."
         ),
         "instructions": {
-            "next": "Open checkout_url, complete payment, then use /buy/thanks or wait for webhook mint.",
-            "docs": f"{_base()}/llms.txt",
-            "pricing": f"{_base()}/api/pricing",
+            "next": (
+                "Open checkout_url and complete payment. Then GET status_url "
+                "(or /buy/thanks?session_id=...) with Accept: application/json to receive mcp_url. "
+                "Webhook also mints automatically."
+            ),
+            "poll": "GET /api/orders/status?session_id={CHECKOUT_SESSION_ID} until payment_status=paid and mcp_url is set.",
+            "docs": f"{base}/llms.txt",
+            "pricing": f"{base}/api/pricing",
             "admin_bypass": pricing["admin_bypass"],
         },
     }

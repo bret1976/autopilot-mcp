@@ -32,6 +32,9 @@ def test_orders_stripe_checkout_required(monkeypatch) -> None:
                         assert body["ok"] is False
                         assert body["payment_required"] is True
                         assert body["checkout_url"] == fake["checkout_url"]
+                        assert body["session_id"] == fake["session_id"]
+                        assert body["status_url"]
+                        assert "cs_test_123" in body["status_url"]
                         assert body["price_usd"] == 997
                         assert "mcp_url" not in body or not body.get("mcp_url")
 
@@ -107,3 +110,55 @@ def test_webhook_fulfills_on_completed(monkeypatch) -> None:
             assert "/mcp/t/" in minted.json()["mcp_url"]
             token = minted.json()["mcp_url"].rstrip("/").rsplit("/", 1)[1]
             assert verify_token(token) is not None
+
+
+def test_orders_status_unpaid(monkeypatch) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    session = SimpleNamespace(
+        id="cs_test_open",
+        payment_status="unpaid",
+        status="open",
+        customer_email="wait@studio.test",
+        metadata={"name": "Wait", "email": "wait@studio.test", "buyer_id": "wait-at-studio-test"},
+        get=lambda k, default=None: getattr(session, k, default) if False else None,
+    )
+    # session.get used by metadata/session_is_paid via getattr primarily
+    with patch("app.main.stripe_configured", return_value=True):
+        with patch("app.main.retrieve_checkout_session", return_value=session):
+            with TestClient(app) as client:
+                res = client.get("/api/orders/status", params={"session_id": "cs_test_open"})
+                assert res.status_code == 200
+                body = res.json()
+                assert body["payment_required"] is True
+                assert body["mcp_url"] is None
+                assert body["session_id"] == "cs_test_open"
+
+
+def test_orders_status_paid_mints(monkeypatch) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    session = SimpleNamespace(
+        id="cs_test_paid_status",
+        payment_status="paid",
+        status="complete",
+        customer_email="statuspaid@studio.test",
+        metadata={
+            "name": "Status Paid",
+            "email": "statuspaid@studio.test",
+            "source": "agent",
+            "client": "",
+            "studio": "",
+        },
+    )
+    with patch("app.main.stripe_configured", return_value=True):
+        with patch("app.main.retrieve_checkout_session", return_value=session):
+            with TestClient(app) as client:
+                res = client.get(
+                    "/api/orders/status",
+                    params={"session_id": "cs_test_paid_status"},
+                    headers={"Accept": "application/json"},
+                )
+                assert res.status_code == 200
+                body = res.json()
+                assert body["ok"] is True
+                assert "/mcp/t/" in body["mcp_url"]
+                assert body["session_id"] == "cs_test_paid_status"

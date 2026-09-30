@@ -14,10 +14,20 @@ Buyers work inside the LLM they already pay for. They paste one URL. They do not
 
 Owner: Bret Jenny / 6Frame Studio.
 
+## Agent buyers
+
+Machine discovery (no buy-UI change):
+
+- `/llms.txt`, `/api/pricing`, `/openapi.json`, `/.well-known/mcp/server-card.json`, `/.well-known/agent.json`, `/agent-terms.md`
+- `POST /api/orders` → HTTP **402** + `checkout_url` + `session_id` when `STRIPE_SECRET_KEY` is set
+- `GET /api/orders/status?session_id=cs_...` → `mcp_url` after paid
+- Price stays **$997 once** (`PRICE_USD` in `app/config.py`)
+
+
 ## What a buyer does
 
-1. Fill name + email on `/buy`. The form mints a signed URL (365 days) and shows it immediately. Stripe is optional later.
-2. Paste the URL into the model they already pay for.
+1. Fill name + email on `/buy` (or `POST /api/orders` as an agent). Stripe Checkout collects **$997 once**; the license MCP URL is minted only after paid Checkout (webhook or `/buy/thanks` / `GET /api/orders/status`). Admin secret can mint for Bret-mediated sales.
+2. Paste the returned MCP URL into the model they already pay for.
 3. In Claude they say they want TrendPilot / Autopilot for their brand and paste their website. The connector calls `onboard` and **asks for their Gemini key, PostProxy key, profile group, and brand/site before any scan or post**.
 4. `setup` saves those keys (never echoed). `set_brand_from_website` pulls voice from their site. Defaults: LinkedIn, X, Instagram, YouTube, Facebook.
 5. `postproxy_connect` returns OAuth links for **their** socials.

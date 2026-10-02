@@ -44,6 +44,7 @@ from app.http_util import (
     WellKnownRewriteMiddleware,
 )
 from app import automation
+from app import run_guard
 from app.automation import scheduler_loop
 from app.mcp_server import bind_buyer, buyer_from_request, mcp
 from app.media import buyer_media_dir, verify_media
@@ -193,6 +194,8 @@ async def health():
         "data_dir_writable": writable,
         "persist": writable,
         "scheduler": automation.scheduler_started,
+        "packs": {"run_guard": run_guard.PACK},
+        "run_guard": run_guard.summary(),
     }
 
 
@@ -657,6 +660,32 @@ async def buy_thanks(request: Request, session_id: str | None = Query(default=No
             mcp_token=fulfilled["token"],
             payment_link=stripe_payment_link() or None,
         ),
+    )
+
+
+@app.get("/api/run-guard/summary")
+async def run_guard_summary():
+    """Backend pack status — no UI."""
+    return run_guard.summary()
+
+
+@app.post("/api/run-guard/check")
+async def run_guard_check(request: Request):
+    """Dry-run duplicate check for a proposed live publish."""
+    body = await _read_body(request)
+    return run_guard.check_publish(
+        buyer_id=str(body.get("buyer_id") or body.get("id") or "probe"),
+        platforms=body.get("platforms"),
+        copy=body.get("copy") if isinstance(body.get("copy"), dict) else {
+            "title": body.get("title") or "",
+            "captions": body.get("captions") if isinstance(body.get("captions"), dict) else {},
+        },
+        media=body.get("media") if isinstance(body.get("media"), dict) else {
+            "vertical_url": body.get("vertical_url") or "",
+            "landscape_url": body.get("landscape_url") or "",
+            "source_url": body.get("source_url") or "",
+        },
+        force=bool(body.get("force") or body.get("run_guard_force")),
     )
 
 

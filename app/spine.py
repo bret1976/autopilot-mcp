@@ -18,6 +18,7 @@ from app.media import MediaError, download_and_cut
 from app.platforms import normalize_platform, split_batches, youtube_title
 from app import postproxy
 from app.proof import build_proof_dashboard
+from app import run_guard
 from app.store import public_config, set_last_run, update_setup
 
 SCAN_PROMPT = """You are scanning live public web results for one ORIGINAL clip this brand can cut today.
@@ -174,6 +175,7 @@ async def publish_cut(
     *,
     mock: bool = False,
     draft: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     platforms = record.get("platforms") or list(ONBOARD_PLATFORMS)
     batches = split_batches(platforms)
@@ -194,6 +196,37 @@ async def publish_cut(
                 },
             ],
         }
+
+    # Soft-block duplicate live publishes (drafts are free to stage).
+    if not draft:
+        buyer_id = str(record.get("id") or record.get("buyer_id") or "")
+        force_flag = bool(
+            force
+            or record.get("run_guard_force")
+            or (isinstance(copy, dict) and copy.get("run_guard_force"))
+        )
+        guard = run_guard.check_publish(
+            buyer_id=buyer_id,
+            platforms=platforms,
+            copy=copy if isinstance(copy, dict) else None,
+            media=media if isinstance(media, dict) else None,
+            force=force_flag,
+        )
+        if guard.get("blocked"):
+            return {
+                "ok": False,
+                "mocked": False,
+                "batches": batches,
+                "posts": [],
+                "blocked_by_run_guard": True,
+                "run_guard": guard,
+                "say_to_user": (
+                    "Run Guard soft-blocked a duplicate live publish within the "
+                    f"{run_guard.window_sec()}s window "
+                    f"(reason={guard.get('reason')}). "
+                    "Call status / last_run, or set run_guard_force to override."
+                ),
+            }
 
     posts = []
     key = record.get("postproxy_api_key") or ""
@@ -223,8 +256,17 @@ async def publish_cut(
                     draft=draft,
                 )
             )
-    result = {"mocked": False, "batches": batches, "posts": posts}
+    result = {"ok": True, "mocked": False, "batches": batches, "posts": posts}
     if not draft and posts and all(item.get("ok") for item in posts):
+        try:
+            run_guard.record_publish(
+                buyer_id=str(record.get("id") or record.get("buyer_id") or ""),
+                platforms=platforms,
+                copy=copy if isinstance(copy, dict) else None,
+                media=media if isinstance(media, dict) else None,
+            )
+        except Exception:  # noqa: BLE001 — ledger must never change the post result
+            pass
         try:
             proof = await build_proof_dashboard(record, result, copy=copy, media=media, draft=False)
         except Exception:  # noqa: BLE001 — proof must never change the post result

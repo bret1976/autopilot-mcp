@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import Request
 
+from app import order_guard
 from app.config import PRICE_USD, public_base_url
 from app.store import append_lead, ensure_buyer, load_buyer, save_buyer
 from app.tokens import clean_buyer_id, mint_token
@@ -43,6 +44,29 @@ def fulfill_order(
     studio: str = "",
     source: str = "buy",
     request: Request | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
+    with order_guard.lock():
+        return _fulfill_order(
+            name=name,
+            email=email,
+            client=client,
+            studio=studio,
+            source=source,
+            request=request,
+            session_id=session_id,
+        )
+
+
+def _fulfill_order(
+    *,
+    name: str,
+    email: str,
+    client: str,
+    studio: str,
+    source: str,
+    request: Request | None,
+    session_id: str | None,
 ) -> dict[str, Any]:
     buyer_id = buyer_id_from_email(email)
     existing = load_buyer(buyer_id)
@@ -65,17 +89,24 @@ def fulfill_order(
             token=token,
         )
     url = mcp_public_url(token, request)
-    order = append_lead(
-        {
-            "name": name,
-            "email": email,
-            "client": client,
-            "studio": studio,
-            "source": source,
-            "buyer_id": buyer_id,
-            "mcp_url": url,
-        }
-    )
+    # order-guard-v1: one Checkout Session -> one order row (status polls and
+    # Stripe webhook retries reuse it instead of appending duplicates).
+    order = order_guard.prior_order(session_id)
+    if order is None:
+        order = append_lead(
+            {
+                "name": name,
+                "email": email,
+                "client": client,
+                "studio": studio,
+                "source": source,
+                "buyer_id": buyer_id,
+                "mcp_url": url,
+            }
+        )
+        order_guard.remember_order(session_id, order)
+    else:
+        order["mcp_url"] = url
     return {
         "ok": True,
         "url": url,

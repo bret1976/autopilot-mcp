@@ -44,6 +44,7 @@ from app.http_util import (
     WellKnownRewriteMiddleware,
 )
 from app import automation
+from app import order_guard
 from app import run_guard
 from app.automation import scheduler_loop
 from app.mcp_server import bind_buyer, buyer_from_request, mcp
@@ -163,11 +164,46 @@ def _admin_bypass(request: Request, body: dict) -> bool:
         return False
     header = (request.headers.get("x-admin-secret") or "").strip()
     body_secret = str(body.get("admin_secret") or "").strip()
+    if not header and not body_secret:
+        return False
+    ip = order_guard.client_ip(request)
+    wait = order_guard.admin_locked(ip)
+    if wait:
+        raise _AdminLocked(wait)
     if header and hmac.compare_digest(header, expected):
+        order_guard.admin_succeeded(ip)
         return True
     if body_secret and hmac.compare_digest(body_secret, expected):
+        order_guard.admin_succeeded(ip)
         return True
+    order_guard.admin_failed(ip)
     return False
+
+
+class _AdminLocked(Exception):
+    def __init__(self, retry_after: int) -> None:
+        super().__init__("admin locked")
+        self.retry_after = retry_after
+
+
+def _secret_ok(candidate: str | None) -> bool:
+    expected = admin_secret()
+    if not expected or not candidate:
+        return False
+    return hmac.compare_digest(str(candidate), expected)
+
+
+def _locked_json(retry_after: int) -> JSONResponse:
+    return JSONResponse(
+        {
+            "ok": False,
+            "error": "too_many_attempts",
+            "message": "Too many wrong admin secrets. Try again later.",
+            "retry_after": retry_after,
+        },
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 def _wants_html(request: Request) -> bool:
@@ -194,8 +230,9 @@ async def health():
         "data_dir_writable": writable,
         "persist": writable,
         "scheduler": automation.scheduler_started,
-        "packs": {"run_guard": run_guard.PACK},
+        "packs": {"run_guard": run_guard.PACK, "order_guard": order_guard.PACK},
         "run_guard": run_guard.summary(),
+        "order_guard": order_guard.summary(),
     }
 
 
@@ -241,7 +278,11 @@ async def create_order(request: Request):
     wants_html = _wants_html(request)
 
     # Bret-mediated sales: admin secret mints immediately (no card).
-    if _admin_bypass(request, body):
+    try:
+        is_admin = _admin_bypass(request, body)
+    except _AdminLocked as locked:
+        return _locked_json(locked.retry_after)
+    if is_admin:
         fulfilled = fulfill_order(
             name=name,
             email=email,
@@ -281,6 +322,34 @@ async def create_order(request: Request):
                 status_code=503,
             )
         return JSONResponse(payload, status_code=503)
+
+    retry_after = order_guard.checkout_retry_after(order_guard.client_ip(request))
+    if retry_after:
+        message = "Too many checkout attempts from this connection. Try again later."
+        if wants_html:
+            return templates.TemplateResponse(
+                request,
+                "buy.html",
+                _ctx(
+                    request,
+                    submitted=False,
+                    error=message,
+                    payment_link=stripe_payment_link() or None,
+                    payment_mode=payment_mode(),
+                ),
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "rate_limited",
+                "message": message,
+                "retry_after": retry_after,
+            },
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
 
     try:
         session = create_checkout_session(
@@ -404,6 +473,19 @@ async def order_status(request: Request, session_id: str | None = Query(default=
     """Agent poll after Checkout — JSON mcp_url once session is paid (and minted)."""
     if not session_id or not str(session_id).startswith("cs_"):
         raise HTTPException(status_code=400, detail="session_id (cs_...) is required.")
+    poll_wait = order_guard.status_retry_after(order_guard.client_ip(request))
+    if poll_wait:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "rate_limited",
+                "message": "Polling too fast. Wait and poll again.",
+                "retry_after": poll_wait,
+                "session_id": session_id,
+            },
+            status_code=429,
+            headers={"Retry-After": str(poll_wait)},
+        )
     if not stripe_configured():
         return JSONResponse(
             {
@@ -461,6 +543,7 @@ async def order_status(request: Request, session_id: str | None = Query(default=
         studio=meta.get("studio") or "",
         source=meta.get("source") or "stripe_status",
         request=request,
+        session_id=str(session_id),
     )
     payload = order_agent_payload(fulfilled)
     payload["payment_status"] = "paid"
@@ -471,7 +554,17 @@ async def order_status(request: Request, session_id: str | None = Query(default=
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_desk(request: Request, secret: str | None = Query(default=None)):
     cookie = request.cookies.get("admin")
-    authorized = secret == admin_secret() or cookie == admin_secret()
+    ip = order_guard.client_ip(request)
+    authorized = _secret_ok(cookie)
+    if not authorized and secret:
+        wait = order_guard.admin_locked(ip)
+        if wait:
+            return _locked_json(wait)
+        authorized = _secret_ok(secret)
+        if authorized:
+            order_guard.admin_succeeded(ip)
+        else:
+            order_guard.admin_failed(ip)
     response = templates.TemplateResponse(
         request,
         "admin.html",
@@ -491,13 +584,19 @@ async def admin_desk(request: Request, secret: str | None = Query(default=None))
 
 @app.post("/admin/login", response_class=HTMLResponse)
 async def admin_login(request: Request, password: str = Form(...)):
-    if password != admin_secret():
+    ip = order_guard.client_ip(request)
+    wait = order_guard.admin_locked(ip)
+    if wait:
+        return _locked_json(wait)
+    if not _secret_ok(password):
+        order_guard.admin_failed(ip)
         return templates.TemplateResponse(
             request,
             "admin.html",
             _ctx(request, authorized=False),
             status_code=401,
         )
+    order_guard.admin_succeeded(ip)
     response = RedirectResponse("/admin", status_code=303)
     response.set_cookie("admin", admin_secret(), httponly=True, samesite="lax")
     return response
@@ -510,7 +609,7 @@ async def admin_mint(
     days: int = Form(0),
     note: str = Form(""),
 ):
-    if request.cookies.get("admin") != admin_secret():
+    if not _secret_ok(request.cookies.get("admin")):
         raise HTTPException(status_code=401, detail="admin secret required")
     email = buyer if "@" in buyer else ""
     slug = clean_buyer_id(buyer.split("@", 1)[0])
@@ -700,6 +799,9 @@ async def stripe_webhook(request: Request):
         raise HTTPException(status_code=400, detail=f"Webhook verify failed: {exc}") from exc
     etype = event["type"] if isinstance(event, dict) else event.type
     data = event["data"]["object"] if isinstance(event, dict) else event.data.object
+    event_id = event.get("id") if isinstance(event, dict) else getattr(event, "id", None)
+    if order_guard.seen_event(event_id):
+        return {"ok": True, "received": True, "type": etype, "duplicate": True}
     if etype == "checkout.session.completed":
         meta = metadata_from_session(data)
         email = (meta.get("email") or getattr(data, "customer_email", None) or "").strip()
@@ -712,7 +814,11 @@ async def stripe_webhook(request: Request):
                 studio=meta.get("studio") or "",
                 source=meta.get("source") or "stripe_webhook",
                 request=request,
+                session_id=(
+                    data.get("id") if isinstance(data, dict) else getattr(data, "id", None)
+                ),
             )
+    order_guard.mark_event(event_id)
     return {"ok": True, "received": True, "type": etype}
 
 

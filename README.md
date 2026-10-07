@@ -155,3 +155,15 @@ python3 scripts/render_explainer.py
 ```
 
 Outputs `public/promo.mp4` and `public/poster.jpg`. The YouTube theory clip is a footnote on the landing, not the hero.
+
+## Order Guard (order-guard-v1)
+
+Backend-only safety pack for the paid buy path (no page or UI changes):
+
+- One Stripe Checkout Session writes one order row. Agent polls of `/api/orders/status` and Stripe webhook retries return the same MCP URL instead of stacking duplicate orders.
+- Stripe webhook event ids are remembered on the data volume; retries are acked with `"duplicate": true`.
+- Wrong admin secrets (`/admin/login`, `/admin?secret=`, `X-Admin-Secret` / `admin_secret`) are counted per client; after `ADMIN_LOCK_MAX` (8) misses in `ADMIN_LOCK_WINDOW_SEC` (900) that client gets `429` until the window passes (global cap `ADMIN_LOCK_GLOBAL_MAX`, 60). Admin compares are constant-time.
+- Public Checkout Session creation is limited to `ORDER_CHECKOUT_PER_HOUR` (20) per client; status polling to `ORDER_STATUS_PER_MIN` (120).
+- `/health` shows `packs.order_guard` and counters. Kill switch: `ORDER_GUARD=0`. Ledger: `ORDER_GUARD_LEDGER` (default `$DATA_DIR/order_guard_ledger.json`).
+
+Patterns (no code copied): Stripe "handle duplicate events" docs, hookdeck/webhook-skills (MIT), jazzband/django-axes (MIT), AdamPflug/express-brute (MIT), laurentS/slowapi (MIT).

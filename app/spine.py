@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,18 +15,36 @@ from app.config import (
     ONBOARD_PLATFORMS,
     public_base_url,
 )
-from app.gemini import generate_json
+from app.gemini import generate_json, generate_json_with_sources
 from app.hashtags import apply_hashtags, topic_tags
-from app.media import MediaError, download_and_cut
+from app.media import (
+    MediaError,
+    cut_direct_clip,
+    download_and_cut,
+    is_direct_video,
+    is_post_url,
+    is_youtube,
+    render_brand_clip,
+    source_kind,
+    source_priority,
+)
 from app.platforms import normalize_platform, split_batches, youtube_title
 from app import postproxy
 from app.proof import build_proof_dashboard
 from app import run_guard
 from app.store import public_config, set_last_run, update_setup
 
-SCAN_PROMPT = """You are scanning live public web results for one ORIGINAL clip this brand can cut today.
-The downloader runs on a datacenter IP. Long YouTube talks (TEDx, podcasts, news) get bot-walled.
-Prefer a SHORT original (under 90s) in this order: TikTok, Instagram Reel, direct .mp4, YouTube Short.
+SCAN_PROMPT = """You are scanning live public web results for ORIGINAL video clips this brand can cut today.
+The downloader runs on a datacenter IP. YouTube bot-walls it ("Sign in to confirm you're not a bot"),
+so YouTube links almost never download. Reddit and Instagram often block it too.
+Return up to 5 candidates, best first, in this source order:
+  1. X / Twitter posts with native video: https://x.com/<user>/status/<id>
+  2. Direct video files (.mp4) or Vimeo videos
+  3. TikTok videos: https://www.tiktok.com/@user/video/<id>
+  4. Reddit video posts (v.redd.it): https://www.reddit.com/r/<sub>/comments/<id>/...
+  5. YouTube Shorts only as a last resort{youtube_rule}
+Every source_url must be a real post permalink you found in search results — never a profile,
+search page, homepage, or invented ID.
 Never return a URL from this failed list: {failed}
 Do not invent a new generated film.
 Do not recommend generating Veo, FAL, or Runway footage.
@@ -31,14 +52,18 @@ The website is the brand of record. Write as that brand, not 6Frame, unless the 
 
 Return JSON only:
 {{
-  "title": "short working title",
-  "source_url": "https://...",
-  "platform": "tiktok|instagram|youtube",
-  "why": "one sentence on why this cut is moving",
-  "topic_tags": ["TopicOne", "TopicTwo"],
-  "suggested_start": 0,
-  "suggested_duration": 45,
-  "notes": "what to keep in the trim"
+  "candidates": [
+    {{
+      "title": "short working title",
+      "source_url": "https://...",
+      "platform": "x|tiktok|vimeo|reddit|instagram|youtube|direct",
+      "why": "one sentence on why this cut is moving",
+      "topic_tags": ["TopicOne", "TopicTwo"],
+      "suggested_start": 0,
+      "suggested_duration": 45,
+      "notes": "what to keep in the trim"
+    }}
+  ]
 }}
 
 Brand: {brand}
@@ -83,11 +108,86 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+logger = logging.getLogger("spine")
+
+GROUNDING_REDIRECT_HOST = "vertexaisearch.cloud.google.com"
+SCAN_FIELDS = (
+    "title",
+    "source_url",
+    "platform",
+    "why",
+    "topic_tags",
+    "suggested_start",
+    "suggested_duration",
+    "notes",
+)
+
+
+async def _resolve_grounding_redirect(client: Any, uri: str) -> str:
+    """Follow one grounding-api-redirect hop and return the real destination URL."""
+    if not uri or GROUNDING_REDIRECT_HOST not in uri:
+        return uri or ""
+    for method in ("HEAD", "GET"):
+        try:
+            res = await client.request(method, uri)
+            location = res.headers.get("location") or ""
+            if location.startswith("http") and GROUNDING_REDIRECT_HOST not in location:
+                return location
+        except Exception:  # noqa: BLE001
+            continue
+    return ""
+
+
+async def resolve_grounded_urls(sources: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Real post permalinks (x.com/status, tiktok/video, reddit/comments, ...) cited by grounding."""
+    if not sources:
+        return []
+    import httpx
+
+    async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+        resolved = await asyncio.gather(
+            *(_resolve_grounding_redirect(client, item.get("uri") or "") for item in sources[:25])
+        )
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item, url in zip(sources, resolved):
+        if not url or url in seen or not is_post_url(url):
+            continue
+        seen.add(url)
+        out.append({"source_url": url, "title": item.get("title") or "", "platform": source_kind(url)})
+    return out
+
+
+def _normalize_candidates(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    listed = raw.get("candidates") if isinstance(raw, dict) else None
+    if isinstance(listed, list):
+        items.extend(item for item in listed if isinstance(item, dict))
+    if isinstance(raw, dict) and raw.get("source_url"):
+        items.append({key: raw.get(key) for key in SCAN_FIELDS})
+    clean: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        url = str(item.get("source_url") or "").strip()
+        if not url.startswith("http") or url in seen:
+            continue
+        seen.add(url)
+        clean.append({**item, "source_url": url})
+    return clean
+
+
+def order_candidates(candidates: list[dict[str, Any]], *, avoid_youtube: bool = False) -> list[dict[str, Any]]:
+    """Non-YouTube originals first (stable order otherwise). Drop YouTube once it bot-walled."""
+    kept = [c for c in candidates if not (avoid_youtube and is_youtube(str(c.get("source_url") or "")))]
+    return sorted(kept, key=lambda c: source_priority(str(c.get("source_url") or "")))
+
+
 async def scan_trends(
     record: dict[str, Any],
     niche: str = "",
     mock: bool = False,
     exclude_urls: list[str] | None = None,
+    avoid_youtube: bool = False,
 ) -> dict[str, Any]:
     failed = ", ".join(exclude_urls or []) or "(none)"
     if mock:
@@ -106,18 +206,64 @@ async def scan_trends(
     brand = record.get("brand_name") or "the buyer's brand"
     website = record.get("website_url") or ""
     default_niche = f"content that fits {brand}" + (f" ({website})" if website else "")
-    return await generate_json(
-        record.get("gemini_api_key") or "",
-        SCAN_PROMPT.format(
-            niche=niche or default_niche,
-            voice=voice,
-            brand=brand,
-            website=website,
-            failed=failed,
+    prompt = SCAN_PROMPT.format(
+        niche=niche or default_niche,
+        voice=voice,
+        brand=brand,
+        website=website,
+        failed=failed,
+        youtube_rule=(
+            ". YouTube is bot-walled right now: return NO YouTube links at all."
+            if avoid_youtube
+            else "."
         ),
-        grounded=True,
-        models=GEMINI_SCAN_MODELS,
     )
+    grounded: list[dict[str, str]] = []
+    try:
+        raw, sources = await generate_json_with_sources(
+            record.get("gemini_api_key") or "",
+            prompt,
+            models=GEMINI_SCAN_MODELS,
+        )
+        try:
+            grounded = await resolve_grounded_urls(sources)
+        except Exception:  # noqa: BLE001 — grounding links are a bonus, never fatal
+            grounded = []
+    except Exception:  # noqa: BLE001 — fall back to the plain grounded call
+        raw = await generate_json(
+            record.get("gemini_api_key") or "",
+            prompt,
+            grounded=True,
+            models=GEMINI_SCAN_MODELS,
+        )
+    candidates = _normalize_candidates(raw)
+    known = {c["source_url"] for c in candidates}
+    for item in grounded:
+        if item["source_url"] in known:
+            continue
+        known.add(item["source_url"])
+        candidates.append(
+            {
+                "title": item.get("title") or (candidates[0].get("title") if candidates else "") or brand,
+                "source_url": item["source_url"],
+                "platform": item.get("platform") or "",
+                "why": (candidates[0].get("why") if candidates else "") or "",
+                "topic_tags": (candidates[0].get("topic_tags") if candidates else []) or [],
+                "suggested_start": 0,
+                "suggested_duration": 45,
+                "notes": "Real post link recovered from Google Search grounding.",
+                "grounded": True,
+            }
+        )
+    skip = set(exclude_urls or [])
+    candidates = order_candidates([c for c in candidates if c["source_url"] not in skip], avoid_youtube=avoid_youtube)
+    top = candidates[0] if candidates else {}
+    result: dict[str, Any] = {key: top.get(key) for key in SCAN_FIELDS}
+    if not result.get("topic_tags"):
+        result["topic_tags"] = []
+    result["candidates"] = candidates
+    result["grounded_urls"] = [item["source_url"] for item in grounded]
+    return result
 
 
 async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = False) -> dict[str, Any]:
@@ -429,6 +575,54 @@ async def _resolve_placement(
     return postproxy.pick_placement(payload, pinned_id=pinned, prefer_name=prefer_name)
 
 
+def _always_post() -> bool:
+    return (os.environ.get("AUTOPILOT_ALWAYS_POST") or "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _fallback_clip_urls() -> list[str]:
+    raw = os.environ.get("FALLBACK_CLIP_URLS") or ""
+    return [part.strip() for part in raw.split(",") if part.strip().startswith("http")]
+
+
+def _brand_scan(record: dict[str, Any], source_url: str) -> dict[str, Any]:
+    brand = str(record.get("brand_name") or "our brand")
+    website = str(record.get("website_url") or "")
+    return {
+        "title": f"{brand} — what we build for founders",
+        "source_url": source_url or website,
+        "platform": "brand",
+        "why": f"A direct note from {brand}: who we are and who we build with. Website: {website}",
+        "topic_tags": [],
+        "suggested_start": 0,
+        "suggested_duration": 12,
+        "notes": "Brand spotlight clip from the brand's own website art. Write as the brand, point to the website.",
+        "scanned": False,
+        "fallback": True,
+    }
+
+
+async def _fallback_media(record: dict[str, Any]) -> tuple[dict[str, Any] | None, list[dict[str, str]]]:
+    """Hosted clip (FALLBACK_CLIP_URLS) first, then a brand clip rendered from the buyer's site."""
+    errors: list[dict[str, str]] = []
+    for url in _fallback_clip_urls():
+        try:
+            media = await asyncio.to_thread(cut_direct_clip, record["buyer_id"], url)
+            return media, errors
+        except MediaError as exc:
+            errors.append({"url": url, "code": exc.code, "error": str(exc)[:300]})
+    try:
+        media = await asyncio.to_thread(render_brand_clip, record["buyer_id"], record)
+        return media, errors
+    except MediaError as exc:
+        errors.append({"url": str(record.get("website_url") or ""), "code": exc.code, "error": str(exc)[:300]})
+    return None, errors
+
+
+MAX_SCANS = 3
+MAX_DOWNLOADS = 6
+CANDIDATE_BUDGET_SECONDS = 420
+
+
 async def run_autopilot(
     record: dict[str, Any],
     *,
@@ -438,15 +632,28 @@ async def run_autopilot(
     draft: bool = False,
     via: str = "manual",
 ) -> dict[str, Any]:
+    """scan → pull an original → copy → publish.
+
+    YouTube bot-walls the Railway IP, so non-YouTube originals (X, direct, Vimeo, TikTok,
+    Reddit) are tried first; once YouTube walls, every later YouTube candidate is skipped
+    without a download. If no original can be pulled, a live run still publishes a hosted
+    or brand fallback clip instead of ending with nothing.
+    """
     skipped: list[dict[str, str]] = []
+    tried: set[str] = set()
     pinned = (source_url or "").strip()
     scan: dict[str, Any] = {}
     media: dict[str, Any] | None = None
-    url = ""
-    for attempt in range(5):
-        exclude = [item["url"] for item in skipped]
-        if pinned and attempt == 0:
-            scan = {
+    youtube_walled = False
+    queue: list[dict[str, Any]] = []
+    scans = 0
+    downloads = 0
+    started = time.monotonic()
+    last_scan: dict[str, Any] = {}
+
+    if pinned:
+        queue.append(
+            {
                 "title": pinned,
                 "source_url": pinned,
                 "platform": "",
@@ -457,34 +664,83 @@ async def run_autopilot(
                 "notes": "Pinned source_url — scan_trends skipped",
                 "scanned": False,
             }
-            url = pinned
-        else:
-            scan = await scan_trends(record, niche=niche, mock=mock, exclude_urls=exclude)
-            url = str(scan.get("source_url") or "")
-            scan["scanned"] = True
-        if not url:
+        )
+
+    while media is None and downloads < MAX_DOWNLOADS:
+        if time.monotonic() - started > CANDIDATE_BUDGET_SECONDS and not mock:
             break
-        if url in exclude:
-            pinned = ""
+        if not queue:
+            if scans >= MAX_SCANS:
+                break
+            scans += 1
+            try:
+                found = await scan_trends(
+                    record,
+                    niche=niche,
+                    mock=mock,
+                    exclude_urls=sorted(tried),
+                    avoid_youtube=youtube_walled,
+                )
+            except Exception as exc:  # noqa: BLE001 — a failed scan should not kill a live run
+                skipped.append({"url": "", "code": "scan_failed", "error": str(exc)[:300]})
+                continue
+            last_scan = {k: v for k, v in found.items() if k != "candidates"}
+            candidates = found.get("candidates")
+            if not isinstance(candidates, list) or not candidates:
+                candidates = [found] if found.get("source_url") else []
+            for item in candidates:
+                queue.append({**item, "scanned": True})
+            # Keep YouTube in the queue (sorted last) so a walled host logs a skip, not a pull.
+            queue = order_candidates(queue)
+            if not queue:
+                continue
+        item = queue.pop(0)
+        url = str(item.get("source_url") or "").strip()
+        if not url or url in tried:
             continue
-        start = float(scan.get("suggested_start") or 0)
-        duration = float(scan.get("suggested_duration") or MAX_CLIP_SECONDS)
-        try:
-            media = await asyncio.to_thread(
-                download_and_cut,
-                record["buyer_id"],
-                url,
-                start=start,
-                duration=duration,
-                mock=mock,
+        tried.add(url)
+        if youtube_walled and is_youtube(url):
+            skipped.append(
+                {
+                    "url": url,
+                    "code": "youtube_bot_wall_skip",
+                    "error": "Skipped: YouTube already bot-walled this host in this run.",
+                }
             )
+            continue
+        start = float(item.get("suggested_start") or 0)
+        duration = float(item.get("suggested_duration") or MAX_CLIP_SECONDS)
+        downloads += 1
+        try:
+            if is_direct_video(url) and not mock:
+                media = await asyncio.to_thread(cut_direct_clip, record["buyer_id"], url, duration=duration)
+            else:
+                media = await asyncio.to_thread(
+                    download_and_cut,
+                    record["buyer_id"],
+                    url,
+                    start=start,
+                    duration=duration,
+                    mock=mock,
+                )
+            scan = {k: v for k, v in item.items() if k != "candidates"}
+            scan.setdefault("scanned", True)
             break
         except MediaError as exc:
-            if exc.code not in {"source_bot_check", "download_failed"}:
+            if exc.code not in {"source_bot_check", "download_failed", "transcode_failed"}:
                 raise
+            if is_youtube(url) and exc.code == "source_bot_check":
+                youtube_walled = True
             skipped.append({"url": url, "code": exc.code, "error": str(exc)})
-            pinned = ""
             continue
+
+    if media is None and not mock and _always_post():
+        media, fallback_errors = await _fallback_media(record)
+        skipped.extend(fallback_errors)
+        if media is not None:
+            scan = _brand_scan(record, str(media.get("source_url") or ""))
+            if last_scan.get("topic_tags"):
+                scan["topic_tags"] = list(last_scan.get("topic_tags") or [])
     if media is None:
         last = skipped[-1]["error"] if skipped else "scan_trends did not return a source_url"
         raise MediaError(
@@ -502,6 +758,7 @@ async def run_autopilot(
         "via": via,
         "scan": scan,
         "media": {k: v for k, v in media.items() if k != "raw"},
+        "media_source": media.get("media_source") or "original",
         "copy": copy,
         "publish": published,
         "skipped_sources": skipped,

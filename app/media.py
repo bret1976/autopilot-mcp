@@ -39,6 +39,11 @@ SOURCE_BLOCK_MARKERS = (
 )
 
 
+# The YouTube bot wall is per-IP, not per-client: after three walls the rest of the
+# player_client strategies fail the same way, so skip to the next non-YouTube original.
+YOUTUBE_MAX_BOT_WALLS = 3
+
+
 class MediaError(RuntimeError):
     def __init__(self, message: str, code: str = "download_failed") -> None:
         super().__init__(message)
@@ -61,8 +66,16 @@ def source_block_message(url: str, detail: str = "") -> str:
     )
 
 
+YTDLP_TIMEOUT_SECONDS = 150
+FFMPEG_TIMEOUT_SECONDS = 240
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, check=False, capture_output=True, text=True)
+    timeout = FFMPEG_TIMEOUT_SECONDS if "ffmpeg" in Path(cmd[0]).name else YTDLP_TIMEOUT_SECONDS
+    try:
+        return subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", f"timed out after {timeout}s")
 
 
 def sign_media(buyer_id: str, filename: str, ttl: int = 60 * 60 * 12) -> str:
@@ -106,6 +119,81 @@ def _which(name: str) -> str | None:
 def _is_youtube(url: str) -> bool:
     host = urlparse(url).netloc.lower()
     return any(part in host for part in ("youtube.com", "youtu.be", "youtube-nocookie.com"))
+
+
+def is_youtube(url: str) -> bool:
+    return _is_youtube(url or "")
+
+
+DIRECT_VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm")
+
+
+def is_direct_video(url: str) -> bool:
+    path = (urlparse(url or "").path or "").lower()
+    return (url or "").startswith("http") and path.endswith(DIRECT_VIDEO_EXTS)
+
+
+def source_kind(url: str) -> str:
+    """Coarse source family. Datacenter-IP pull reliability: x > direct > tiktok/vimeo > reddit > youtube."""
+    host = (urlparse(url or "").netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if _is_youtube(url or ""):
+        return "youtube"
+    if host in {"x.com", "twitter.com", "mobile.twitter.com", "mobile.x.com"} or host.endswith(".twitter.com"):
+        return "x"
+    if "reddit.com" in host or host in {"v.redd.it", "redd.it"}:
+        return "reddit"
+    if "tiktok.com" in host:
+        return "tiktok"
+    if "instagram.com" in host:
+        return "instagram"
+    if "vimeo.com" in host:
+        return "vimeo"
+    if is_direct_video(url):
+        return "direct"
+    return "other"
+
+
+# Lower = tried first. YouTube is last: Railway's datacenter IP gets YouTube's
+# "Sign in to confirm you're not a bot" wall on almost every pull.
+SOURCE_PRIORITY = {
+    "x": 0,
+    "direct": 1,
+    "vimeo": 2,
+    "tiktok": 3,
+    "reddit": 4,
+    "other": 5,
+    "instagram": 6,
+    "youtube": 9,
+}
+
+
+def source_priority(url: str) -> int:
+    return SOURCE_PRIORITY.get(source_kind(url), 5)
+
+
+def is_post_url(url: str) -> bool:
+    """True for a direct video/post permalink (not a search, profile, or home page)."""
+    if not url or not url.startswith("http"):
+        return False
+    kind = source_kind(url)
+    path = urlparse(url).path or ""
+    if kind == "youtube":
+        return "/shorts/" in path or "watch" in path or "youtu.be" in url
+    if kind == "x":
+        return "/status/" in path
+    if kind == "reddit":
+        return "/comments/" in path or "v.redd.it" in url
+    if kind == "tiktok":
+        return "/video/" in path
+    if kind == "instagram":
+        return any(seg in path for seg in ("/p/", "/reel/", "/reels/", "/tv/"))
+    if kind == "vimeo":
+        return any(ch.isdigit() for ch in path)
+    if kind == "direct":
+        return True
+    return False
 
 
 def impersonate_available() -> bool:
@@ -214,7 +302,10 @@ def download_and_cut(
 
     last_err = ""
     raw: Path | None = None
+    youtube_walls = 0
     for extra in _pull_strategies(source_url):
+        if youtube_walls >= YOUTUBE_MAX_BOT_WALLS:
+            break
         pull = _run(
             [
                 yt_dlp,
@@ -233,6 +324,8 @@ def download_and_cut(
             break
         last_err = (pull.stderr or pull.stdout or "yt-dlp failed")[-800:]
         raw = None
+        if _is_youtube(source_url) and is_source_block(last_err):
+            youtube_walls += 1
         if _impersonate_failed(last_err) and not impersonate_available():
             continue
 
@@ -338,3 +431,195 @@ def _public_record(buyer_id: str, record: dict[str, Any]) -> dict[str, Any]:
     if record.get("poster"):
         urls["poster_url"] = media_url(buyer_id, record["poster"], base)
     return urls
+
+
+# --- Always-post fallback ----------------------------------------------------------
+# When every scanned original is bot-walled or unreachable, a live "Autopost Right Now"
+# must still publish. Order: operator-hosted clips (FALLBACK_CLIP_URLS, direct video
+# links) → a short brand clip rendered on this host from the buyer's own website
+# og:image. Never another company's clip.
+
+FALLBACK_SECONDS = 12
+
+
+def _fetch_bytes(url: str, timeout: float = 30.0, limit: int = 200 * 1024 * 1024) -> bytes:
+    import httpx
+
+    with httpx.Client(timeout=timeout, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 TrendPilot-MCP/1.0"}) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        data = response.content
+    if len(data) > limit:
+        raise MediaError(f"fallback asset too large: {url}", code="download_failed")
+    return data
+
+
+def _has_video_stream(path: Path) -> bool:
+    probe = shutil.which("ffprobe")
+    if not probe:
+        return path.exists() and path.stat().st_size > 0
+    result = _run_ffprobe([probe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", str(path)])
+    return bool((result.stdout or "").strip())
+
+
+def _run_ffprobe(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", "ffprobe timed out")
+
+
+def cut_direct_clip(buyer_id: str, url: str, *, duration: float = MAX_CLIP_SECONDS) -> dict[str, Any]:
+    """Fetch a direct .mp4/.mov/.webm over HTTPS (no yt-dlp) and cut both masters."""
+    ffmpeg = _which("ffmpeg")
+    if not ffmpeg:
+        raise MediaError("ffmpeg is not installed on this host", code="downloader_missing")
+    duration = max(3.0, min(float(duration), float(MAX_CLIP_SECONDS)))
+    dest = buyer_media_dir(buyer_id)
+    stem = hashlib.sha256(url.encode()).hexdigest()[:12]
+    ext = Path(urlparse(url).path).suffix.lower() or ".mp4"
+    raw = dest / f"{stem}-raw{ext if ext in DIRECT_VIDEO_EXTS else '.mp4'}"
+    try:
+        raw.write_bytes(_fetch_bytes(url))
+    except MediaError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise MediaError(f"Could not fetch fallback clip {url}: {exc}", code="download_failed") from exc
+    if not _has_video_stream(raw):
+        raise MediaError(f"Fallback clip has no video stream: {url}", code="download_failed")
+    vertical = dest / f"{stem}-9x16.mp4"
+    landscape = dest / f"{stem}-16x9.mp4"
+    poster = dest / f"{stem}-poster.jpg"
+    _transcode(ffmpeg, raw, vertical, "1080:1920", 0.0, duration)
+    _transcode(ffmpeg, raw, landscape, "1920:1080", 0.0, duration)
+    _poster_frame(ffmpeg, landscape, poster)
+    record = {
+        "source_url": url,
+        "mock": False,
+        "duration": duration,
+        "start": 0.0,
+        "raw": raw.name,
+        "vertical": vertical.name,
+        "landscape": landscape.name,
+        "poster": poster.name,
+        "media_source": "hosted_fallback",
+    }
+    (dest / f"{stem}.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+    return _public_record(buyer_id, record)
+
+
+def _brand_image(website: str, dest: Path) -> Path | None:
+    """Download the brand's own og:image / twitter:image from its homepage."""
+    import re
+    from urllib.parse import urljoin
+
+    if not website:
+        return None
+    try:
+        html = _fetch_bytes(website, timeout=20.0, limit=5 * 1024 * 1024).decode("utf-8", "ignore")
+    except Exception:  # noqa: BLE001
+        return None
+    found = ""
+    for prop in ("og:image", "og:image:url", "twitter:image", "twitter:image:src"):
+        for tag in re.findall(r"<meta[^>]+>", html, flags=re.I):
+            if re.search(r"(?:property|name)\s*=\s*[\"']" + re.escape(prop) + r"[\"']", tag, flags=re.I):
+                match = re.search(r"content\s*=\s*[\"']([^\"']+)[\"']", tag, flags=re.I)
+                if match:
+                    found = match.group(1).strip()
+                    break
+        if found:
+            break
+    if not found:
+        return None
+    image_url = urljoin(website, found.replace("&amp;", "&"))
+    try:
+        data = _fetch_bytes(image_url, timeout=20.0, limit=20 * 1024 * 1024)
+    except Exception:  # noqa: BLE001
+        return None
+    path = dest / "brand-og-source.img"
+    path.write_bytes(data)
+    try:
+        from PIL import Image
+
+        with Image.open(path) as img:
+            img.convert("RGB").save(dest / "brand-og.png")
+        return dest / "brand-og.png"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _brand_card_image(dest: Path, brand: str, tagline: str) -> Path:
+    """Plain brand card when the site has no og:image."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (1920, 1080), (10, 12, 18))
+    draw = ImageDraw.Draw(img)
+    try:
+        big = ImageFont.load_default(size=150)
+        small = ImageFont.load_default(size=56)
+    except TypeError:  # very old Pillow
+        big = small = ImageFont.load_default()
+    draw.text((960, 470), brand or "", fill=(245, 245, 245), font=big, anchor="mm")
+    if tagline:
+        draw.text((960, 640), tagline[:70], fill=(170, 180, 200), font=small, anchor="mm")
+    path = dest / "brand-card.png"
+    img.save(path)
+    return path
+
+
+def render_brand_clip(buyer_id: str, record: dict[str, Any], *, seconds: int = FALLBACK_SECONDS) -> dict[str, Any]:
+    """Render a short 9:16 + 16:9 brand clip from the buyer's own website art."""
+    ffmpeg = _which("ffmpeg")
+    if not ffmpeg:
+        raise MediaError("ffmpeg is not installed on this host", code="downloader_missing")
+    dest = buyer_media_dir(buyer_id)
+    website = str(record.get("website_url") or "").strip()
+    brand = str(record.get("brand_name") or "").strip()
+    stem = "brand-" + hashlib.sha256(f"{website}|{brand}|{int(time.time())}".encode()).hexdigest()[:10]
+    still = _brand_image(website, dest) or _brand_card_image(dest, brand, website.replace("https://", "").strip("/"))
+    vertical = dest / f"{stem}-9x16.mp4"
+    landscape = dest / f"{stem}-16x9.mp4"
+    poster = dest / f"{stem}-poster.jpg"
+    frames = int(seconds * 30)
+    zoom = f"zoompan=z='min(zoom+0.0006,1.12)':d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps=30"
+    common_tail = [
+        "-f", "lavfi", "-t", str(seconds), "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+    ]
+    out_tail = [
+        "-map", "[v]", "-map", "1:a", "-t", str(seconds),
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30",
+        "-c:a", "aac", "-b:a", "128k", "-shortest", "-movflags", "+faststart",
+    ]
+    land_cmd = [
+        ffmpeg, "-y", "-loop", "1", "-i", str(still), *common_tail,
+        "-filter_complex",
+        f"[0:v]scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1,{zoom}:s=1920x1080,format=yuv420p[v]",
+        *out_tail, str(landscape),
+    ]
+    vert_cmd = [
+        ffmpeg, "-y", "-loop", "1", "-i", str(still), *common_tail,
+        "-filter_complex",
+        "[0:v]split=2[a][b];"
+        "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=30:2,eq=brightness=-0.15[bg];"
+        "[b]scale=1080:-2[fg];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1,{zoom}:s=1080x1920,format=yuv420p[v]",
+        *out_tail, str(vertical),
+    ]
+    for cmd, path in ((land_cmd, landscape), (vert_cmd, vertical)):
+        result = _run(cmd)
+        if result.returncode != 0 or not path.exists():
+            raise MediaError((result.stderr or "")[-500:] or f"ffmpeg failed for {path.name}", code="transcode_failed")
+    _poster_frame(ffmpeg, landscape, poster)
+    meta = {
+        "source_url": website,
+        "mock": False,
+        "duration": float(seconds),
+        "start": 0.0,
+        "raw": still.name,
+        "vertical": vertical.name,
+        "landscape": landscape.name,
+        "poster": poster.name,
+        "media_source": "brand_fallback",
+    }
+    (dest / f"{stem}.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return _public_record(buyer_id, meta)

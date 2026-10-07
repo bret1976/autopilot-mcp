@@ -634,7 +634,8 @@ async def choose_start(mode: str) -> dict[str, Any]:
         {
             "start_mode": chosen,
             "walkthrough_step": RUNNING,
-            "automation_enabled": True,
+            # "Autopost Right Now" is one immediate run; recurring slots stay OFF.
+            "automation_enabled": chosen != START_NOW,
             "require_approval": False,
         },
     )

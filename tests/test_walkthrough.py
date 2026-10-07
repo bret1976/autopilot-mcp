@@ -140,3 +140,29 @@ def test_clock_and_start_helpers() -> None:
     assert normalize_start_mode("Autopost Right Now") == START_NOW
     assert normalize_start_mode("Start AutoPost at scheduled times") == START_SCHEDULED
     assert normalize_start_mode("Autopost right now and then start automation for scheduled times") == START_BOTH
+
+
+@pytest.mark.asyncio
+async def test_choose_start_now_keeps_recurring_off(monkeypatch) -> None:
+    bind_buyer("now-only")
+    ensure_buyer("now-only")
+    reset_instance("now-only")
+    await setup(
+        gemini_api_key="test-gemini-not-real",
+        postproxy_api_key="test-postproxy-not-real",
+        postproxy_profile_group_id="grp_test",
+        brand_name="North Light",
+        website_url="https://northlight.example",
+        brand_voice="Write as North Light.",
+    )
+    await set_automation(times="8am and 5pm")
+    await confirm_schedule()
+
+    async def fake_run(*args, **kwargs):
+        return {"ok": True, "draft": kwargs.get("draft"), "started": True}
+
+    monkeypatch.setattr("app.mcp_server.run_autopilot_tool", fake_run)
+    result = await choose_start("now")
+    assert result["start_mode"] == START_NOW
+    saved = load_buyer("now-only")
+    assert saved.get("automation_enabled") is False

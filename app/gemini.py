@@ -54,14 +54,71 @@ async def generate_text(
     raise RuntimeError("Gemini request failed. " + " | ".join(errors))
 
 
-async def _call_model(
+async def generate_json_with_sources(
+    api_key: str,
+    prompt: str,
+    *,
+    models: tuple[str, ...] = GEMINI_COPY_MODELS,
+    timeout: float = GEMINI_TIMEOUT_SECONDS,
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Grounded JSON plus the real web sources Google Search cited.
+
+    Gemini grounding rarely prints real post links in its answer text; the links live in
+    grounding_metadata.groundingChunks as vertexaisearch grounding-api-redirect URIs.
+    Returns (parsed_json, [{"uri": redirect_or_real_uri, "title": ...}]).
+    """
+    if not api_key:
+        raise RuntimeError("Gemini API key is not configured. Call setup first.")
+    errors: list[str] = []
+    for model in models:
+        try:
+            data = await _call_model_raw(api_key, model, prompt, grounded=True, timeout=timeout)
+            text = _response_text(data)
+            if not text:
+                raise RuntimeError("Gemini returned an empty response")
+            try:
+                parsed = parse_json_object(text)
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError(f"bad JSON: {exc}") from exc
+            return parsed, grounding_sources(data)
+        except Exception as exc:  # noqa: BLE001 — try the next Gemini model
+            errors.append(f"{model}: {exc}")
+    raise RuntimeError("Gemini request failed. " + " | ".join(errors))
+
+
+def grounding_sources(data: dict[str, Any]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    try:
+        candidate = (data.get("candidates") or [{}])[0] or {}
+        meta = candidate.get("groundingMetadata") or candidate.get("grounding_metadata") or {}
+        chunks = meta.get("groundingChunks") or meta.get("grounding_chunks") or []
+    except Exception:  # noqa: BLE001
+        return out
+    for chunk in chunks:
+        web = (chunk or {}).get("web") or {}
+        uri = str(web.get("uri") or "").strip()
+        if uri:
+            out.append({"uri": uri, "title": str(web.get("title") or "")})
+    return out
+
+
+def _response_text(data: dict[str, Any]) -> str:
+    parts = (
+        (data.get("candidates") or [{}])[0]
+        .get("content", {})
+        .get("parts", [])
+    )
+    return "".join(part.get("text", "") for part in parts if isinstance(part, dict)).strip()
+
+
+async def _call_model_raw(
     api_key: str,
     model: str,
     prompt: str,
     *,
     grounded: bool,
     timeout: float,
-) -> str:
+) -> dict[str, Any]:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload: dict[str, Any] = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -80,13 +137,19 @@ async def _call_model(
         raise RuntimeError(f"timeout after {int(timeout)}s") from exc
     if response.status_code >= 400:
         raise RuntimeError(f"HTTP {response.status_code} {response.text[:400]}")
-    data = response.json()
-    parts = (
-        data.get("candidates", [{}])[0]
-        .get("content", {})
-        .get("parts", [])
-    )
-    text = "".join(part.get("text", "") for part in parts if isinstance(part, dict)).strip()
+    return response.json()
+
+
+async def _call_model(
+    api_key: str,
+    model: str,
+    prompt: str,
+    *,
+    grounded: bool,
+    timeout: float,
+) -> str:
+    data = await _call_model_raw(api_key, model, prompt, grounded=grounded, timeout=timeout)
+    text = _response_text(data)
     if not text:
         raise RuntimeError("Gemini returned an empty response")
     return text

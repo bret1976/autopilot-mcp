@@ -70,6 +70,10 @@ def hashtags_for(
     for tag in extras:
         if tag not in tags:
             tags.append(tag)
+    if locked is not None:
+        # A buyer's own brand tags were passed: never pad with 6Frame's studio
+        # film tags (#GenerativeFilm, #CinematicAI, ...) on another brand's post.
+        return tags[:hi]
     for pad in _PAD:
         if len(tags) >= lo:
             break

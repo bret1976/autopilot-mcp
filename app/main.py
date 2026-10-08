@@ -762,6 +762,7 @@ async def buy_thanks(request: Request, session_id: str | None = Query(default=No
         studio=meta.get("studio") or "",
         source=meta.get("source") or "stripe",
         request=request,
+        session_id=str(session_id),
     )
     accept = (request.headers.get("accept") or "").lower()
     if "application/json" in accept and "text/html" not in accept:

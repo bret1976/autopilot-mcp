@@ -103,10 +103,14 @@ def missing_fields(record: dict[str, Any]) -> list[dict[str, str]]:
 
 def readiness(record: dict[str, Any]) -> dict[str, Any]:
     missing = missing_fields(record)
-    can_scan = not any(item["id"] == "gemini_api_key" for item in missing)
-    can_publish = not any(
-        item["id"] in {"postproxy_api_key", "postproxy_profile_group_id"} for item in missing
-    )
+    # Gate on the stored keys themselves. missing_fields() only lists the
+    # website while the brand step is open, so deriving these from it let
+    # scan_trends / write_copy / publish start keyless jobs on a fresh license.
+    def _has(key: str) -> bool:
+        return bool(str(record.get(key) or "").strip())
+
+    can_scan = _has("gemini_api_key")
+    can_publish = _has("postproxy_api_key") and _has("postproxy_profile_group_id")
     has_brand = not any(item["id"] == "website_url" for item in missing)
     ready = can_scan and can_publish and has_brand
     walk = walkthrough_view(record)

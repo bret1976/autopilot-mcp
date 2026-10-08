@@ -20,7 +20,8 @@ def test_scan_uses_flash_only_copy_keeps_pro() -> None:
     assert GEMINI_SCAN_MODELS == ("gemini-3.6-flash",)
     assert GEMINI_COPY_MODELS[0] == "gemini-3.1-pro-preview"
     assert "gemini-3.6-flash" in GEMINI_COPY_MODELS
-    assert GEMINI_TIMEOUT_SECONDS <= 25
+    # Scan/copy run as background jobs; keep each Gemini call bounded but not Grok-bounded.
+    assert 30 <= GEMINI_TIMEOUT_SECONDS <= 60
 
 
 @pytest.mark.asyncio

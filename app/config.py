@@ -63,11 +63,22 @@ DEFAULT_BRAND_VOICE = (
     "Prefer craft language: frame, cut, light, tempo, voice."
 )
 
-# Buyer keys stay on these two IDs. Grounded scan must finish inside Grok's ~30s tool budget.
+# Buyer keys stay on these two IDs. Scan/copy run as background jobs (status polling),
+# so a Gemini call is no longer bound by a host's ~30s tool budget. 22s timed out
+# grounded scans on a fresh license; GEMINI_TIMEOUT_SECONDS overrides.
 GEMINI_SCAN_MODELS = ("gemini-3.6-flash",)
 GEMINI_COPY_MODELS = ("gemini-3.1-pro-preview", "gemini-3.6-flash")
 GEMINI_MODELS = GEMINI_COPY_MODELS
-GEMINI_TIMEOUT_SECONDS = 22.0
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return max(5.0, float(os.environ.get(name) or default))
+    except ValueError:
+        return default
+
+
+GEMINI_TIMEOUT_SECONDS = _float_env("GEMINI_TIMEOUT_SECONDS", 45.0)
 
 MAX_CLIP_SECONDS = 59
 POSTPROXY_API_BASE = "https://api.postproxy.dev"

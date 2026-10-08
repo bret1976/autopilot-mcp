@@ -232,7 +232,7 @@ Admin `X-Admin-Secret` / `admin_secret` mints immediately for Bret-mediated offl
 ## Payment, minting, and revocation
 
 - Public mint requires a **paid** Stripe Checkout session (or admin bypass).
-- Re-POST `/api/orders` for the same email starts a new Checkout; after paid, fulfill is idempotent (same buyer keeps a usable token).
+- Re-POST `/api/orders` for the same email starts a new Checkout. Fulfillment is idempotent per Checkout Session (polls, `/buy/thanks`, and webhook retries return the same MCP URL); a new paid session for an email that already has a license mints a separate license and never reuses the existing token.
 - {STUDIO_NAME} may revoke a license via `REVOKED_KEYS` (buyer_id or full token) for abuse, chargeback, or breach.
 - Chargebacks / unpaid disputes may result in immediate revoke.
 

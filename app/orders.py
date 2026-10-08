@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from fastapi import Request
@@ -15,6 +16,25 @@ LICENSE_DAYS = 365
 def buyer_id_from_email(email: str) -> str:
     local, _, domain = email.strip().lower().partition("@")
     return clean_buyer_id(f"{local}-at-{domain}")
+
+
+def _buyer_for_new_session(email: str, session_id: str | None) -> str:
+    """Buyer id for a paid session that has no order row yet.
+
+    The email on a Checkout Session is whatever the payer typed; it is not
+    verified. A new paid session must never inherit another license's token just
+    because the email matches, so a second purchase for an email that already
+    has a license gets its own tenant (``<email-id>-<session hash>``). Admin
+    mints (no session_id) keep the Bret-mediated reissue behaviour.
+    """
+    base = buyer_id_from_email(email)
+    if not session_id:
+        return base
+    existing = load_buyer(base)
+    if existing is None or existing.get("stripe_session_id") == str(session_id):
+        return base
+    suffix = hashlib.sha256(str(session_id).encode()).hexdigest()[:8]
+    return clean_buyer_id(f"{base[:71]}-{suffix}")
 
 
 def _public_base(request: Request | None = None) -> str:
@@ -68,7 +88,14 @@ def _fulfill_order(
     request: Request | None,
     session_id: str | None,
 ) -> dict[str, Any]:
-    buyer_id = buyer_id_from_email(email)
+    # order-guard-v1: one Checkout Session -> one order row (status polls and
+    # Stripe webhook retries reuse it instead of appending duplicates).
+    order = order_guard.prior_order(session_id)
+    prior_buyer = str((order or {}).get("buyer_id") or "")
+    if prior_buyer and load_buyer(prior_buyer):
+        buyer_id = prior_buyer
+    else:
+        buyer_id = _buyer_for_new_session(email, session_id)
     existing = load_buyer(buyer_id)
     if existing:
         token = str(existing.get("token") or mint_token(buyer_id, days=LICENSE_DAYS))
@@ -88,10 +115,10 @@ def _fulfill_order(
             note=studio or name,
             token=token,
         )
+        if session_id:
+            record["stripe_session_id"] = str(session_id)
+            record = save_buyer(record)
     url = mcp_public_url(token, request)
-    # order-guard-v1: one Checkout Session -> one order row (status polls and
-    # Stripe webhook retries reuse it instead of appending duplicates).
-    order = order_guard.prior_order(session_id)
     if order is None:
         order = append_lead(
             {

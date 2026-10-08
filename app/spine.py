@@ -416,16 +416,20 @@ async def publish_cut(
                 )
             )
     result = {"ok": True, "mocked": False, "batches": batches, "posts": posts}
-    if not draft and posts and all(item.get("ok") for item in posts):
+    posted = [item for item in posts if item.get("ok")]
+    if not draft and posted:
+        # Record even a partial send (e.g. Facebook 422, others live) so a re-run
+        # cannot double-post to the platforms that already went out.
         try:
             run_guard.record_publish(
                 buyer_id=str(record.get("id") or record.get("buyer_id") or ""),
-                platforms=platforms,
+                platforms=[item.get("platform") for item in posted if item.get("platform")] or platforms,
                 copy=copy if isinstance(copy, dict) else None,
                 media=media if isinstance(media, dict) else None,
             )
         except Exception:  # noqa: BLE001 — ledger must never change the post result
             pass
+    if not draft and posts and len(posted) == len(posts):
         try:
             proof = await build_proof_dashboard(record, result, copy=copy, media=media, draft=False)
         except Exception:  # noqa: BLE001 — proof must never change the post result

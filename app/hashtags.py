@@ -99,6 +99,12 @@ def apply_hashtags(
     if not tags:
         return text
     if key in {"twitter", "x"}:
+        # Gemini often ends the X caption with the same tags; do not repeat them.
+        lowered = text.lower()
+        tags = [tag for tag in tags if tag.lower() not in lowered]
+        if not tags:
+            return text[:twitter_limit]
+        tag_line = " ".join(tags)
         candidate = f"{text} {tag_line}".strip() if text else tag_line
         if len(candidate) <= twitter_limit:
             return candidate

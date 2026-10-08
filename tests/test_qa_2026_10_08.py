@@ -129,3 +129,11 @@ def test_partial_publish_is_recorded_and_blocks_a_double_post() -> None:
         assert any(p["ok"] for p in first["posts"])
         again = asyncio.run(spine.publish_cut(record, copy, media, draft=False))
     assert again.get("blocked_by_run_guard") is True
+
+
+def test_x_caption_does_not_repeat_tags_gemini_already_wrote() -> None:
+    body = "One thoughtful cup at a time. #PourOver #BlueBottleCoffee"
+    out = apply_hashtags("twitter", body, ["PourOver"], locked=("#BlueBottleCoffee",))
+    assert out.count("#PourOver") == 1 and out.count("#BlueBottleCoffee") == 1
+    out = apply_hashtags("x", "Plain line.", ["PourOver"], locked=("#BlueBottleCoffee",))
+    assert out == "Plain line. #PourOver"

@@ -303,16 +303,25 @@ def download_and_cut(
     last_err = ""
     raw: Path | None = None
     youtube_walls = 0
-    for extra in _pull_strategies(source_url):
+    cut_start = start
+    # Only pull the window we cut (plus a second of slack): long X/YouTube videos
+    # otherwise download in full and blow the time budget before any trim.
+    section = ["--download-sections", f"*{max(0.0, start):.2f}-{start + duration + 1:.2f}"]
+    attempts = [(extra, True) for extra in _pull_strategies(source_url)]
+    attempts.append((_pull_strategies(source_url)[-1], False))  # last resort: full pull
+    for extra, sectioned in attempts:
         if youtube_walls >= YOUTUBE_MAX_BOT_WALLS:
+            break
+        if not sectioned and is_source_block(last_err):
             break
         pull = _run(
             [
                 yt_dlp,
                 "-f",
-                "bv*+ba/b",
+                "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b",
                 "--merge-output-format",
                 "mp4",
+                *(section if sectioned else []),
                 "-o",
                 str(raw_template),
                 *extra,
@@ -321,9 +330,18 @@ def download_and_cut(
         )
         raw = _find_raw(dest, stem)
         if pull.returncode == 0 and raw is not None:
+            cut_start = 0.0 if sectioned else start
             break
         last_err = (pull.stderr or pull.stdout or "yt-dlp failed")[-800:]
         raw = None
+        for stale in dest.glob(f"{stem}-raw.*"):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+        if pull.returncode == 124:
+            # Timed out: this original is too slow from this host. Next candidate.
+            break
         if _is_youtube(source_url) and is_source_block(last_err):
             youtube_walls += 1
         if _impersonate_failed(last_err) and not impersonate_available():
@@ -339,8 +357,8 @@ def download_and_cut(
         code = "source_bot_check" if is_source_block(last_err) else "download_failed"
         raise MediaError(source_block_message(source_url, last_err), code=code)
 
-    _transcode(ffmpeg, raw, vertical, "1080:1920", start, duration)
-    _transcode(ffmpeg, raw, landscape, "1920:1080", start, duration)
+    _transcode(ffmpeg, raw, vertical, "1080:1920", cut_start, duration)
+    _transcode(ffmpeg, raw, landscape, "1920:1080", cut_start, duration)
     _poster_frame(ffmpeg, landscape, poster)
     record = {
         "source_url": source_url,

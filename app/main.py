@@ -46,6 +46,7 @@ from app.http_util import (
 from app import automation
 from app import order_guard
 from app import run_guard
+from app import yt_proxy
 from app.automation import scheduler_loop
 from app.mcp_server import bind_buyer, buyer_from_request, mcp
 from app.media import buyer_media_dir, verify_media
@@ -233,7 +234,27 @@ async def health():
         "packs": {"run_guard": run_guard.PACK, "order_guard": order_guard.PACK},
         "run_guard": run_guard.summary(),
         "order_guard": order_guard.summary(),
+        "yt_proxy": yt_proxy.summary(),
     }
+
+
+@app.post("/api/yt-proxy/register")
+async def yt_proxy_register(request: Request):
+    """The Mac Mini watchdog registers its current Cloudflare tunnel URL here.
+
+    Auth: X-Proxy-Token must equal YT_DOWNLOAD_PROXY_TOKEN. No secrets are returned.
+    """
+    if not yt_proxy.token_ok(request.headers.get("x-proxy-token")):
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    try:
+        record = yt_proxy.register(str((body or {}).get("url") or ""))
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return {"ok": True, "registered_at": record["registered_at"]}
 
 
 @app.get("/", response_class=HTMLResponse)

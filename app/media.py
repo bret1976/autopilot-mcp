@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from app import yt_proxy
 from app.config import MAX_CLIP_SECONDS, data_dir, issuer_secret, public_base_url, ytdlp_cookies_file
 
 SOURCE_BLOCK_MARKERS = (
@@ -169,8 +170,16 @@ SOURCE_PRIORITY = {
 }
 
 
+# With the residential Mini pull proxy configured, YouTube downloads work again, so
+# it goes back to a normal slot (after X / direct files) instead of dead last.
+YOUTUBE_PRIORITY_WITH_PROXY = 2
+
+
 def source_priority(url: str) -> int:
-    return SOURCE_PRIORITY.get(source_kind(url), 5)
+    kind = source_kind(url)
+    if kind == "youtube" and yt_proxy.configured():
+        return YOUTUBE_PRIORITY_WITH_PROXY
+    return SOURCE_PRIORITY.get(kind, 5)
 
 
 def is_post_url(url: str) -> bool:
@@ -253,6 +262,22 @@ def _pull_strategies(url: str) -> list[list[str]]:
     return cleaned
 
 
+def _pull_via_proxy(
+    source_url: str, dest: Path, stem: str, start: float, duration: float
+) -> tuple[Path | None, float, str]:
+    """(raw_path, cut_start, error). Never raises: callers fall back to local yt-dlp."""
+    raw = dest / f"{stem}-raw.mp4"
+    try:
+        sectioned = yt_proxy.pull(source_url, raw, start=start, duration=duration)
+    except Exception as exc:  # noqa: BLE001
+        raw.unlink(missing_ok=True)
+        return None, start, str(exc)[-600:]
+    if not _has_video_stream(raw):
+        raw.unlink(missing_ok=True)
+        return None, start, "Mini proxy returned a file without video"
+    return raw, (0.0 if sectioned else start), ""
+
+
 def _find_raw(dest: Path, stem: str) -> Path | None:
     matches = [path for path in dest.glob(f"{stem}-raw.*") if path.is_file() and path.stat().st_size > 0]
     if not matches:
@@ -304,12 +329,24 @@ def download_and_cut(
     raw: Path | None = None
     youtube_walls = 0
     cut_start = start
+    via = "local"
+    proxy_tried = False
+    proxy_note = ""
+
+    # YouTube walls Railway's datacenter IP: pull it through the residential Mini first.
+    if _is_youtube(source_url) and yt_proxy.configured():
+        proxy_tried = True
+        raw, cut_start, proxy_note = _pull_via_proxy(source_url, dest, stem, start, duration)
+        if raw is not None:
+            via = "mini_proxy"
     # Only pull the window we cut (plus a second of slack): long X/YouTube videos
     # otherwise download in full and blow the time budget before any trim.
     section = ["--download-sections", f"*{max(0.0, start):.2f}-{start + duration + 1:.2f}"]
     attempts = [(extra, True) for extra in _pull_strategies(source_url)]
     attempts.append((_pull_strategies(source_url)[-1], False))  # last resort: full pull
     for extra, sectioned in attempts:
+        if raw is not None:
+            break
         if youtube_walls >= YOUTUBE_MAX_BOT_WALLS:
             break
         if not sectioned and is_source_block(last_err):
@@ -347,6 +384,14 @@ def download_and_cut(
         if _impersonate_failed(last_err) and not impersonate_available():
             continue
 
+    # Any other host that blocks this IP (Reddit/Instagram 403s): one try through the Mini.
+    if raw is None and not proxy_tried and is_source_block(last_err) and yt_proxy.configured():
+        raw, cut_start, proxy_err = _pull_via_proxy(source_url, dest, stem, start, duration)
+        if raw is not None:
+            via = "mini_proxy"
+        else:
+            last_err = f"{last_err}\nMini proxy: {proxy_err}"
+
     if raw is None:
         if _impersonate_failed(last_err) and not impersonate_available():
             raise MediaError(
@@ -355,7 +400,10 @@ def download_and_cut(
                 code="download_failed",
             )
         code = "source_bot_check" if is_source_block(last_err) else "download_failed"
-        raise MediaError(source_block_message(source_url, last_err), code=code)
+        message = source_block_message(source_url, last_err)
+        if proxy_note:
+            message += f" Mini proxy: {proxy_note[-240:]}"
+        raise MediaError(message, code=code)
 
     _transcode(ffmpeg, raw, vertical, "1080:1920", cut_start, duration)
     _transcode(ffmpeg, raw, landscape, "1920:1080", cut_start, duration)
@@ -364,6 +412,7 @@ def download_and_cut(
         "source_url": source_url,
         "mock": False,
         "duration": duration,
+        "pulled_via": via,
         "start": start,
         "raw": raw.name,
         "vertical": vertical.name,

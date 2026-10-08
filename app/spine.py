@@ -32,17 +32,11 @@ from app.platforms import normalize_platform, split_batches, youtube_title
 from app import postproxy
 from app.proof import build_proof_dashboard
 from app import run_guard
+from app import yt_proxy
 from app.store import public_config, set_last_run, update_setup
 
 SCAN_PROMPT = """You are scanning live public web results for ORIGINAL video clips this brand can cut today.
-The downloader runs on a datacenter IP. YouTube bot-walls it ("Sign in to confirm you're not a bot"),
-so YouTube links almost never download. Reddit and Instagram often block it too.
-Return up to 5 candidates, best first, in this source order:
-  1. X / Twitter posts with native video: https://x.com/<user>/status/<id>
-  2. Direct video files (.mp4) or Vimeo videos
-  3. TikTok videos: https://www.tiktok.com/@user/video/<id>
-  4. Reddit video posts (v.redd.it): https://www.reddit.com/r/<sub>/comments/<id>/...
-  5. YouTube Shorts only as a last resort{youtube_rule}
+{source_rules}{youtube_rule}
 Every source_url must be a real post permalink you found in search results — never a profile,
 search page, homepage, or invented ID.
 Never return a URL from this failed list: {failed}
@@ -102,6 +96,24 @@ Return JSON only:
   }}
 }}
 """
+
+
+SOURCE_RULES_DATACENTER = """The downloader runs on a datacenter IP. YouTube bot-walls it ("Sign in to confirm you're not a bot"),
+so YouTube links almost never download. Reddit and Instagram often block it too.
+Return up to 5 candidates, best first, in this source order:
+  1. X / Twitter posts with native video: https://x.com/<user>/status/<id>
+  2. Direct video files (.mp4) or Vimeo videos
+  3. TikTok videos: https://www.tiktok.com/@user/video/<id>
+  4. Reddit video posts (v.redd.it): https://www.reddit.com/r/<sub>/comments/<id>/...
+  5. YouTube Shorts only as a last resort"""
+
+SOURCE_RULES_WITH_PROXY = """YouTube originals download fine (residential pull). Prefer short, recent clips.
+Return up to 5 candidates, best first, mixing sources:
+  - X / Twitter posts with native video: https://x.com/<user>/status/<id>
+  - YouTube Shorts or videos: https://www.youtube.com/shorts/<id> or https://www.youtube.com/watch?v=<id>
+  - Direct video files (.mp4) or Vimeo videos
+  - TikTok videos: https://www.tiktok.com/@user/video/<id>
+  - Reddit video posts (v.redd.it): https://www.reddit.com/r/<sub>/comments/<id>/..."""
 
 
 def _stamp() -> str:
@@ -212,10 +224,11 @@ async def scan_trends(
         brand=brand,
         website=website,
         failed=failed,
+        source_rules=SOURCE_RULES_WITH_PROXY if yt_proxy.configured() else SOURCE_RULES_DATACENTER,
         youtube_rule=(
-            ". YouTube is bot-walled right now: return NO YouTube links at all."
+            "\nYouTube is bot-walled right now: return NO YouTube links at all."
             if avoid_youtube
-            else "."
+            else ""
         ),
     )
     grounded: list[dict[str, str]] = []

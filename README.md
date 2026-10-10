@@ -1,6 +1,6 @@
-# 6Frame Autopilot MCP
+# TrendPilot
 
-A sellable MCP: buyers paste one private URL into Claude, Grok, Codex, Cursor, Google Antigravity, ChatGPT, or Claude Code. They enter **their** Gemini and PostProxy keys. Autopilot runs the locked spine:
+A sellable MCP: buyers paste one private URL into Claude, Grok, Codex, Cursor, Google Antigravity, ChatGPT, or Claude Code. They enter **their** Gemini and PostProxy keys. TrendPilot runs the locked spine:
 
 scan a viral AI-filmmaking original → download it → trim under 60s → write 6Frame-voice copy with hashtags → PostProxy publishes.
 
@@ -29,7 +29,7 @@ Machine discovery (no buy-UI change):
 
 1. Fill name + email on `/buy` (or `POST /api/orders` as an agent). Stripe Checkout collects **$997 once**; the license MCP URL is minted only after paid Checkout (webhook or `/buy/thanks` / `GET /api/orders/status`). Admin secret can mint for Bret-mediated sales.
 2. Paste the returned MCP URL into the model they already pay for.
-3. In Claude they say they want TrendPilot / Autopilot for their brand and paste their website. The connector calls `onboard` and **asks for their Gemini key, PostProxy key, profile group, and brand/site before any scan or post**.
+3. In Claude they say they want TrendPilot for their brand and paste their website. The connector calls `onboard` and **asks for their Gemini key, PostProxy key, profile group, and brand/site before any scan or post**.
 4. `setup` saves those keys (never echoed). `set_brand_from_website` pulls voice from their site. Defaults: LinkedIn, X, Instagram, YouTube, Facebook.
 5. `postproxy_connect` returns OAuth links for **their** socials.
 6. `run_autopilot` runs live (`draft=true` first). Mock mode is rejected. No 6Frame stub clips.
@@ -148,7 +148,7 @@ Do not put Gemini or PostProxy keys in Railway. Buyers enter those through `setu
 
 ## Video
 
-Hero video intercuts value cards with live Autopilot footage and a spoken walkthrough. 45–75s. Render with:
+Hero video intercuts value cards with live TrendPilot footage and a spoken walkthrough. 45–75s. Render with:
 
 ```bash
 python3 scripts/render_explainer.py

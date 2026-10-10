@@ -271,7 +271,7 @@ def render_proof_html(manifest: dict[str, Any]) -> str:
         )
     brand = escape(str(manifest.get("brand_name") or "this brand"))
     when = escape(str(manifest.get("posted_at") or ""))
-    title = escape(str(manifest.get("title") or "Autopilot cut"))
+    title = escape(str(manifest.get("title") or "TrendPilot cut"))
     count = len(manifest.get("platforms") or [])
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -383,6 +383,6 @@ async def proof_from_last_run(record: dict[str, Any]) -> dict[str, Any]:
     if not built:
         return {
             "ok": False,
-            "say_to_user": "No confirmed live posts yet. Run Autopilot with draft=false first.",
+            "say_to_user": "No confirmed live posts yet. Run TrendPilot with draft=false first.",
         }
     return built

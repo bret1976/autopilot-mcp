@@ -64,7 +64,7 @@ def create_checkout_session(
                     "unit_amount": AMOUNT_CENTS,
                     "product_data": {
                         "name": f"{PRODUCT_NAME} License",
-                        "description": f"One-time {PRICE_USD} USD Autopilot MCP license (SKU {SKU_ID})",
+                        "description": f"One-time {PRICE_USD} USD TrendPilot license (SKU {SKU_ID})",
                     },
                 },
             }

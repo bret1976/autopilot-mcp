@@ -43,7 +43,7 @@ SUGGESTED_TIMES_PER_DAY = 2
 HOST_RULES = [
     "Repeat say_to_user verbatim. Do not paraphrase.",
     "Never mention a leftover brand. This setup is blank until the user pastes a website in this chat.",
-    "Never open a Cloud Browser. Never start a second Autopilot conversation. Never say tell me done.",
+    "Never open a Cloud Browser. Never start a second TrendPilot conversation. Never say tell me done.",
     "Collect Gemini, PostProxy key, and PostProxy profile group in THIS chat via the setup tool.",
     "Do not call status first. Do not browse websites. Do not draft posts. Do not invent keys.",
     "Render choices as buttons. Call the tool named in next_tool.",
@@ -243,7 +243,7 @@ def say_for_step(record: dict[str, Any], step: str) -> str:
             "Step 5 — The three APIs are saved.\n\n"
             "What time of day should Autopost run, and how many times per day?\n"
             f"{suggested_schedule_line()}\n\n"
-            "Call set_automation with those times. Do not post yet. Do not run Autopilot yet."
+            "Call set_automation with those times. Do not post yet. Do not run TrendPilot yet."
         )
     if step == CONFIRM_SCHEDULE:
         return (
@@ -318,7 +318,7 @@ def next_actions(step: str) -> list[str]:
         ],
         ASK_SCHEDULE: [
             "Ask times and how many times per day. Always suggest twice a day.",
-            "Call set_automation. Do not run Autopilot yet.",
+            "Call set_automation. Do not run TrendPilot yet.",
         ],
         CONFIRM_SCHEDULE: [
             "Show the Confirm schedule button.",

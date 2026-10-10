@@ -129,7 +129,7 @@ This file is for AI agents and automated purchasers. Human buy page: {base}/buy
 
 ## Product
 
-- Name: {PRODUCT_NAME} / MCP server name `{MCP_SERVER_NAME}`
+- Name: {PRODUCT_NAME} (MCP server name `{MCP_SERVER_NAME}`)
 - Owner: {OWNER_NAME} / {STUDIO_NAME}
 - Studio site: {STUDIO_WEBSITE}
 - Live: {base}
@@ -199,7 +199,7 @@ def agent_terms_md() -> str:
 
 ## Product and price
 
-- SKU: `{SKU_ID}` — one commercial license for the TrendPilot / {PRODUCT_NAME} MCP tool surface.
+- SKU: `{SKU_ID}` — one commercial license for the {PRODUCT_NAME} MCP tool surface.
 - List price: **${PRICE_USD} USD once** (no agent discount unless Bret Jenny publishes one).
 - License term on mint: {LICENSE_DAYS} days from issuance (renewal/re-mint requires a new paid order or admin reissue).
 - Buyer supplies their own Gemini API key and PostProxy credentials; those spends are not included.
@@ -216,7 +216,7 @@ Admin `X-Admin-Secret` / `admin_secret` mints immediately for Bret-mediated offl
 
 ## Allowed use
 
-- Operate Autopilot for the **licensed buyer brand** only, using that buyer’s Gemini + PostProxy keys.
+- Operate TrendPilot for the **licensed buyer brand** only, using that buyer’s Gemini + PostProxy keys.
 - Prefer `run_autopilot(draft=true)` before live publish.
 - Obey Instagram, TikTok, YouTube, Facebook, LinkedIn, and X platform rules and applicable law.
 - One license per tenant unless a written platform agreement says otherwise.
@@ -244,7 +244,7 @@ Admin `X-Admin-Secret` / `admin_secret` mints immediately for Bret-mediated offl
 
 ## Data and secrets
 
-- Buyer keys and media are stored under the service data volume for Autopilot operation (`{base}`).
+- Buyer keys and media are stored under the service data volume for TrendPilot operation (`{base}`).
 - Tools never echo stored API secrets.
 - Deletion / export requests: contact {OWNER_NAME} via {STUDIO_WEBSITE}.
 

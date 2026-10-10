@@ -10,7 +10,7 @@ CTA_LABEL = f"Get the link · ${PRICE_USD} once"
 CTA_ACCESS = f"Get access · ${PRICE_USD}"
 CTA_PRICE = f"Get your MCP link · ${PRICE_USD}"
 
-PRODUCT_NAME = "6Frame Autopilot"
+PRODUCT_NAME = "TrendPilot"
 MCP_SERVER_NAME = "TrendPilot"
 STUDIO_NAME = "6Frame Studio"
 STUDIO_WEBSITE = "https://6framestudio.com"

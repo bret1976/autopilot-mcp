@@ -16,7 +16,7 @@ def mint(email: str, buyer_id: str = "", note: str = "", days: int = 0) -> dict[
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Mint a signed 6Frame Autopilot MCP URL.")
+    parser = argparse.ArgumentParser(description="Mint a signed TrendPilot URL.")
     parser.add_argument("--email", required=True)
     parser.add_argument("--buyer-id", default="")
     parser.add_argument("--note", default="")

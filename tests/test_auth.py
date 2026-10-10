@@ -68,12 +68,12 @@ def test_health_and_landing() -> None:
         assert "border-radius:999px" in css
         assert "$997" in text
         assert "Get the link · $997 once" in text
-        assert "Buy the Autopilot workflow." in text
+        assert "Buy the TrendPilot workflow." in text
         assert "not another dashboard" in text.lower()
         assert "What you are actually buying" in text
         assert "Three steps. No install. No new app." in text
         assert "What do I get after I fill the form?" in text
-        assert "Run Autopilot for my studio." in text
+        assert "Run TrendPilot for my studio." in text
         assert "Codex" in text
         assert "Grok" in text
         assert "Antigravity" in text

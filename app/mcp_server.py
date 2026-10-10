@@ -711,7 +711,7 @@ async def status() -> dict[str, Any]:
 
 @mcp.tool
 async def proof_link() -> dict[str, Any]:
-    """After a live Autopilot post, return the proof link. Does not change setup or posting."""
+    """After a live TrendPilot post, return the proof link. Does not change setup or posting."""
     record = current_record()
     built = await proof_from_last_run(record)
     if built.get("ok") and built.get("url"):

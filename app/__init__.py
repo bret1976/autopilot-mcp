@@ -1,1 +1,1 @@
-"""6Frame Autopilot MCP — locked spine, buyer-owned keys."""
+"""TrendPilot — locked spine, buyer-owned keys."""

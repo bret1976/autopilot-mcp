@@ -28,7 +28,13 @@ from app.media import (
     source_kind,
     source_priority,
 )
-from app.platforms import normalize_platform, split_batches, youtube_title
+from app.platforms import (
+    effective_platforms,
+    normalize_platform,
+    split_batches,
+    uses_default_platforms,
+    youtube_title,
+)
 from app import postproxy
 from app.proof import build_proof_dashboard
 from app import run_guard
@@ -280,7 +286,7 @@ async def scan_trends(
 
 
 async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = False) -> dict[str, Any]:
-    platforms = record.get("platforms") or list(ONBOARD_PLATFORMS)
+    platforms = effective_platforms(record)
     extras = topic_tags(scan.get("topic_tags") or [])
     locked = tuple(record.get("brand_hashtags") or ())
     if mock:
@@ -336,7 +342,23 @@ async def publish_cut(
     draft: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
-    platforms = record.get("platforms") or list(ONBOARD_PLATFORMS)
+    key = record.get("postproxy_api_key") or ""
+    group = record.get("postproxy_profile_group_id") or ""
+    indexed: dict[str, dict[str, Any]] = {}
+    if not mock:
+        try:
+            indexed = postproxy.index_profiles(await postproxy.list_profiles(key, group))
+        except postproxy.PostProxyError:
+            indexed = {}
+    # Any profile in the group counts (an expired one still gets tried, so the
+    # reconnect URL comes back instead of a silent skip).
+    connected = set(indexed)
+    platforms = effective_platforms(record, connected or None)
+    skipped = (
+        [name for name in ONBOARD_PLATFORMS if name not in platforms]
+        if connected and uses_default_platforms(record)
+        else []
+    )
     batches = split_batches(platforms)
     if mock:
         return {
@@ -388,12 +410,6 @@ async def publish_cut(
             }
 
     posts = []
-    key = record.get("postproxy_api_key") or ""
-    group = record.get("postproxy_profile_group_id") or ""
-    try:
-        indexed = postproxy.index_profiles(await postproxy.list_profiles(key, group))
-    except postproxy.PostProxyError:
-        indexed = {}
 
     for aspect, names, url in (
         ("9:16", batches["vertical_9x16"], media.get("vertical_url")),
@@ -416,6 +432,8 @@ async def publish_cut(
                 )
             )
     result = {"ok": True, "mocked": False, "batches": batches, "posts": posts}
+    if skipped:
+        result["skipped_not_connected"] = skipped
     posted = [item for item in posts if item.get("ok")]
     if not draft and posted:
         # Record even a partial send (e.g. Facebook 422, others live) so a re-run
@@ -439,6 +457,9 @@ async def publish_cut(
     return result
 
 
+TIKTOK_CAPTION_MAX = 2200
+
+
 async def _publish_one(
     record: dict[str, Any],
     copy: dict[str, Any],
@@ -458,7 +479,14 @@ async def _publish_one(
     media_urls = [url] if url else []
     if name == "google_business":
         media_urls = [url] if url else []
-    body = copy["captions"].get(name) or copy.get("title") or ""
+    captions = copy.get("captions") or {}
+    body = captions.get(name) or ""
+    if not body and name == "tiktok":
+        # Copy written before TikTok was targeted: reuse the other vertical caption.
+        body = captions.get("instagram") or captions.get("youtube") or ""
+    body = body or copy.get("title") or ""
+    if name == "tiktok":
+        body = body[:TIKTOK_CAPTION_MAX]
 
     async def send(media_list: list[str]) -> Any:
         return await postproxy.create_post(

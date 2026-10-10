@@ -16,7 +16,7 @@ from app.config import (
     data_dir,
 )
 from app.onboard import brand_name_from_host, hashtags_from_name, is_studio_voice, is_studio_website
-from app.platforms import normalize_platforms
+from app.platforms import effective_platforms, normalize_platforms
 from app.tokens import mint_token
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -221,6 +221,7 @@ def reset_instance(buyer_id: str) -> dict[str, Any]:
     record["brand_voice"] = ""
     record["brand_hashtags"] = []
     record["platforms"] = list(ONBOARD_PLATFORMS)
+    record["platforms_set_by_user"] = False
     record["automation_enabled"] = False
     record["require_approval"] = False
     record["daily_run_hours"] = [DEFAULT_DAILY_HOUR]
@@ -305,6 +306,7 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
             continue
         if key == "platforms":
             record[key] = normalize_platforms(value if isinstance(value, list) else [value])
+            record["platforms_set_by_user"] = bool(record[key])
             continue
         if key == "brand_hashtags":
             if isinstance(value, str):
@@ -371,7 +373,7 @@ def public_config(record: dict[str, Any]) -> dict[str, Any]:
         "website_url": record.get("website_url") or None,
         "brand_voice": record.get("brand_voice") or None,
         "brand_hashtags": record.get("brand_hashtags") or [],
-        "platforms": record.get("platforms") or list(ONBOARD_PLATFORMS),
+        "platforms": effective_platforms(record),
         "daily_run_hour": hours_from_record(record)[0],
         "daily_run_hours": hours_from_record(record),
         "daily_run_days": [WEEKDAYS[i] for i in days_from_record(record)],

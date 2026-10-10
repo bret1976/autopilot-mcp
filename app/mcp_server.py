@@ -12,6 +12,7 @@ from app.config import ONBOARD_PLATFORMS, public_base_url
 from app import postproxy
 from app.jobs import is_busy, load_job, spawn_job
 from app.media import MediaError, download_and_cut
+from app.platforms import effective_platforms
 from app.onboard import blocked, fetch_brand_from_website, normalize_website, readiness
 from app.proof import proof_from_last_run
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
@@ -704,7 +705,7 @@ async def status() -> dict[str, Any]:
     payload["last_run"] = record.get("last_run")
     payload["job"] = load_job(record["buyer_id"])
     payload["busy"] = is_busy(record["buyer_id"])
-    payload["defaults"]["platforms"] = list(record.get("platforms") or ONBOARD_PLATFORMS)
+    payload["defaults"]["platforms"] = effective_platforms(record)
     return payload
 
 

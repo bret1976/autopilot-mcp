@@ -33,6 +33,17 @@ ONBOARD_PLATFORMS = (
     "linkedin",
     "twitter",
     "instagram",
+    "tiktok",
+    "youtube",
+    "facebook",
+)
+
+# The default before TikTok was added. Licenses created then still carry this exact
+# list; a list equal to it (and never picked in setup) is read as the default.
+LEGACY_ONBOARD_PLATFORMS = (
+    "linkedin",
+    "twitter",
+    "instagram",
     "youtube",
     "facebook",
 )

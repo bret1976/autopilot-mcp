@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from app.config import IMAGE_PLATFORMS, LANDSCAPE_PLATFORMS, VERTICAL_PLATFORMS
+from app.config import (
+    IMAGE_PLATFORMS,
+    LANDSCAPE_PLATFORMS,
+    LEGACY_ONBOARD_PLATFORMS,
+    ONBOARD_PLATFORMS,
+    VERTICAL_PLATFORMS,
+)
 
 ALIASES = {
     "ig": "instagram",
@@ -77,3 +83,29 @@ def youtube_title(title: str) -> str:
     if "#shorts" not in text.lower():
         text = f"{text} #Shorts"
     return text[:100]
+
+
+def uses_default_platforms(record: dict) -> bool:
+    """True when the buyer never picked platforms in setup (record still holds a default list)."""
+    if record.get("platforms_set_by_user"):
+        return False
+    chosen = set(normalize_platforms(record.get("platforms") or []))
+    return not chosen or chosen in (set(ONBOARD_PLATFORMS), set(LEGACY_ONBOARD_PLATFORMS))
+
+
+def effective_platforms(record: dict, connected: set[str] | None = None) -> list[str]:
+    """Platforms one run targets.
+
+    A list the buyer picked in setup is used as-is. Otherwise the current default
+    (which includes TikTok) is used, trimmed to the networks actually connected in the
+    buyer's PostProxy group when that is known, so an unconnected default (e.g. no
+    Facebook page) is not attempted and a connected one (e.g. TikTok) is not skipped.
+    """
+    if not uses_default_platforms(record):
+        return normalize_platforms(record.get("platforms") or [])
+    base = list(ONBOARD_PLATFORMS)
+    if connected:
+        live = [name for name in base if name in connected]
+        if live:
+            return live
+    return base

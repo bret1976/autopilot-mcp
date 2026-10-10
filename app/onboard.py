@@ -15,6 +15,7 @@ from app.config import (
     STUDIO_NAME,
 )
 from app.hashtags import normalize_tag
+from app.platforms import effective_platforms
 from app.walkthrough import walkthrough_view
 
 _TITLE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
@@ -131,7 +132,7 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
         "host_rules": walk["host_rules"],
         "verbatim": True,
         "defaults": {
-            "platforms": list(record.get("platforms") or ONBOARD_PLATFORMS),
+            "platforms": effective_platforms(record),
             "daily_run_hour": record.get("daily_run_hour") or DEFAULT_DAILY_HOUR,
             "daily_run_timezone": record.get("daily_run_timezone") or DEFAULT_DAILY_TIMEZONE,
             "automation_enabled": False,

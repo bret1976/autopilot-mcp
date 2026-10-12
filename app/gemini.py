@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from app.config import GEMINI_COPY_MODELS, GEMINI_TIMEOUT_SECONDS
+from app import gemini_budget
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.S)
 
@@ -18,6 +19,7 @@ async def generate_json(
     grounded: bool = False,
     models: tuple[str, ...] = GEMINI_COPY_MODELS,
     timeout: float = GEMINI_TIMEOUT_SECONDS,
+    budget_scope: str | None = None,
 ) -> dict[str, Any]:
     text = await generate_text(
         api_key,
@@ -25,6 +27,7 @@ async def generate_json(
         grounded=grounded,
         models=models,
         timeout=timeout,
+        budget_scope=budget_scope,
     )
     return parse_json_object(text)
 
@@ -36,6 +39,7 @@ async def generate_text(
     grounded: bool = False,
     models: tuple[str, ...] = GEMINI_COPY_MODELS,
     timeout: float = GEMINI_TIMEOUT_SECONDS,
+    budget_scope: str | None = None,
 ) -> str:
     if not api_key:
         raise RuntimeError("Gemini API key is not configured. Call setup first.")
@@ -48,7 +52,10 @@ async def generate_text(
                 prompt,
                 grounded=grounded,
                 timeout=timeout,
+                budget_scope=budget_scope,
             )
+        except gemini_budget.BudgetExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 — try the next Gemini model
             errors.append(f"{model}: {exc}")
     raise RuntimeError("Gemini request failed. " + " | ".join(errors))
@@ -60,6 +67,7 @@ async def generate_json_with_sources(
     *,
     models: tuple[str, ...] = GEMINI_COPY_MODELS,
     timeout: float = GEMINI_TIMEOUT_SECONDS,
+    budget_scope: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """Grounded JSON plus the real web sources Google Search cited.
 
@@ -72,7 +80,14 @@ async def generate_json_with_sources(
     errors: list[str] = []
     for model in models:
         try:
-            data = await _call_model_raw(api_key, model, prompt, grounded=True, timeout=timeout)
+            data = await _call_model_raw(
+                api_key,
+                model,
+                prompt,
+                grounded=True,
+                timeout=timeout,
+                budget_scope=budget_scope,
+            )
             text = _response_text(data)
             if not text:
                 raise RuntimeError("Gemini returned an empty response")
@@ -81,6 +96,8 @@ async def generate_json_with_sources(
             except Exception as exc:  # noqa: BLE001
                 raise RuntimeError(f"bad JSON: {exc}") from exc
             return parsed, grounding_sources(data)
+        except gemini_budget.BudgetExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 — try the next Gemini model
             errors.append(f"{model}: {exc}")
     raise RuntimeError("Gemini request failed. " + " | ".join(errors))
@@ -118,7 +135,10 @@ async def _call_model_raw(
     *,
     grounded: bool,
     timeout: float,
+    budget_scope: str | None = None,
 ) -> dict[str, Any]:
+    # Count every real HTTP attempt against the daily budget (fail-closed when over).
+    gemini_budget.consume(budget_scope)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload: dict[str, Any] = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -147,8 +167,16 @@ async def _call_model(
     *,
     grounded: bool,
     timeout: float,
+    budget_scope: str | None = None,
 ) -> str:
-    data = await _call_model_raw(api_key, model, prompt, grounded=grounded, timeout=timeout)
+    data = await _call_model_raw(
+        api_key,
+        model,
+        prompt,
+        grounded=grounded,
+        timeout=timeout,
+        budget_scope=budget_scope,
+    )
     text = _response_text(data)
     if not text:
         raise RuntimeError("Gemini returned an empty response")

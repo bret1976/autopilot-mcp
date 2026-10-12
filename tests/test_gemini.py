@@ -28,7 +28,7 @@ def test_scan_uses_flash_only_copy_keeps_pro() -> None:
 async def test_generate_text_fails_over_after_short_timeout(monkeypatch) -> None:
     seen: list[str] = []
 
-    async def fake_call(api_key, model, prompt, *, grounded, timeout):
+    async def fake_call(api_key, model, prompt, *, grounded, timeout, budget_scope=None):
         seen.append(model)
         assert timeout <= 25
         if model == "gemini-3.1-pro-preview":

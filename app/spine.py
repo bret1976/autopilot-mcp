@@ -243,6 +243,7 @@ async def scan_trends(
             record.get("gemini_api_key") or "",
             prompt,
             models=GEMINI_SCAN_MODELS,
+            budget_scope=str(record.get("buyer_id") or "anon"),
         )
         try:
             grounded = await resolve_grounded_urls(sources)
@@ -254,6 +255,7 @@ async def scan_trends(
             prompt,
             grounded=True,
             models=GEMINI_SCAN_MODELS,
+            budget_scope=str(record.get("buyer_id") or "anon"),
         )
     candidates = _normalize_candidates(raw)
     known = {c["source_url"] for c in candidates}
@@ -316,6 +318,7 @@ async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = 
             ),
             grounded=False,
             models=GEMINI_COPY_MODELS,
+            budget_scope=str(record.get("buyer_id") or "anon"),
         )
     extras = topic_tags(raw.get("topic_tags") or extras)
     captions: dict[str, str] = {}

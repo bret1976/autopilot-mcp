@@ -167,3 +167,14 @@ Backend-only safety pack for the paid buy path (no page or UI changes):
 - `/health` shows `packs.order_guard` and counters. Kill switch: `ORDER_GUARD=0`. Ledger: `ORDER_GUARD_LEDGER` (default `$DATA_DIR/order_guard_ledger.json`).
 
 Patterns (no code copied): Stripe "handle duplicate events" docs, hookdeck/webhook-skills (MIT), jazzband/django-axes (MIT), AdamPflug/express-brute (MIT), laurentS/slowapi (MIT).
+
+## Gemini Daily Budget (gemini-daily-budget-v1)
+
+Backend-only spend guard for Gemini `generateContent` calls (no page or UI changes):
+
+- Every real Gemini HTTP attempt (scan + copy, including model failover tries) counts against a per-buyer scope and a global pool for the current UTC day.
+- Default caps: `GEMINI_DAILY_CALLS_PER_SCOPE=48`, `GEMINI_DAILY_CALLS_GLOBAL=2000`. Over-limit calls raise a clear error with `retry_after_sec` until 00:00 UTC.
+- `/health` shows `packs.gemini_daily_budget` and counters. Summary: `GET /api/gemini-daily-budget/summary`. Kill switch: `GEMINI_DAILY_BUDGET=0`. Ledger: `GEMINI_DAILY_BUDGET_LEDGER` (default `$DATA_DIR/gemini_daily_budget.json`).
+
+Patterns (no code copied): ZhuoZhuoCrayon/throttled-py (MIT), laurentS/slowapi (MIT), Google AI Studio billing docs, olcayto-akbudak/retry-storm-simulator (MIT).
+

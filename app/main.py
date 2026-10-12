@@ -44,6 +44,7 @@ from app.http_util import (
     WellKnownRewriteMiddleware,
 )
 from app import automation
+from app import gemini_budget
 from app import order_guard
 from app import run_guard
 from app import yt_proxy
@@ -231,9 +232,14 @@ async def health():
         "data_dir_writable": writable,
         "persist": writable,
         "scheduler": automation.scheduler_started,
-        "packs": {"run_guard": run_guard.PACK, "order_guard": order_guard.PACK},
+        "packs": {
+            "run_guard": run_guard.PACK,
+            "order_guard": order_guard.PACK,
+            "gemini_daily_budget": gemini_budget.PACK,
+        },
         "run_guard": run_guard.summary(),
         "order_guard": order_guard.summary(),
+        "gemini_daily_budget": gemini_budget.summary(),
         "yt_proxy": yt_proxy.summary(),
     }
 
@@ -788,6 +794,12 @@ async def buy_thanks(request: Request, session_id: str | None = Query(default=No
 async def run_guard_summary():
     """Backend pack status — no UI."""
     return run_guard.summary()
+
+
+@app.get("/api/gemini-daily-budget/summary")
+async def gemini_daily_budget_summary():
+    """Backend pack status — no UI."""
+    return gemini_budget.summary()
 
 
 @app.post("/api/run-guard/check")

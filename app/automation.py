@@ -68,7 +68,10 @@ def is_due(record: dict[str, Any], now: datetime | None = None) -> bool:
     slot = slot_id(here)
     last_slot = str(record.get("last_automation_slot") or "")
     if last_slot == slot:
-        return False
+        # Growth V2: one retry of a failed slot (cap 2 attempts), same slot hour only.
+        from app import growth_v2
+
+        return growth_v2.slot_retry_due(str(record.get("buyer_id") or ""), slot)
     today = here.date().isoformat()
     if last_slot:
         return True
@@ -140,6 +143,15 @@ async def run_due_buyer(record: dict[str, Any], now: datetime | None = None) -> 
     if not buyer_id or is_busy(buyer_id) or not is_due(record, now):
         return None
     here = local_now(record, now)
+    from app import growth_v2
+
+    slot = slot_id(here)
+    if growth_v2.enabled():
+        row = growth_v2.slot_attempts(buyer_id, slot)
+        if int(row.get("attempts") or 0) >= growth_v2.max_slot_attempts():
+            mark_fired(buyer_id, here)
+            return None
+        growth_v2.note_slot_attempt(buyer_id, slot)
     mark_fired(buyer_id, here)
     draft = require_approval(record)
 
@@ -149,12 +161,22 @@ async def run_due_buyer(record: dict[str, Any], now: datetime | None = None) -> 
 
         bind_buyer(buyer_id)
         fresh = load_buyer(buyer_id) or record
-        return await run_autopilot(
-            fresh,
-            mock=False,
-            draft=draft,
-            via="automation",
-        )
+        ok = False
+        try:
+            result = await run_autopilot(
+                fresh,
+                mock=False,
+                draft=draft,
+                via="automation",
+            )
+            posts = ((result or {}).get("publish") or {}).get("posts") or []
+            ok = bool(result.get("ok")) and (draft or any(p.get("ok") for p in posts))
+            return result
+        finally:
+            if growth_v2.enabled():
+                growth_v2.note_slot_attempt(buyer_id, slot, ok=ok)
+                if not ok:
+                    growth_v2.add_alert(buyer_id, "slot_failed", f"Automation slot {slot} produced no live post.")
 
     return spawn_job(
         buyer_id,
@@ -164,8 +186,32 @@ async def run_due_buyer(record: dict[str, Any], now: datetime | None = None) -> 
     )
 
 
+_last_deletion_check = 0.0
+
+
+async def _deletion_sweep() -> None:
+    global _last_deletion_check
+    import time as _time
+
+    from app import growth_v2
+
+    if not growth_v2.enabled() or _time.time() - _last_deletion_check < 6 * 3600:
+        return
+    _last_deletion_check = _time.time()
+    for record in iter_buyer_records():
+        try:
+            await growth_v2.check_deletions(record)
+        except Exception:  # noqa: BLE001
+            logger.exception("deletion check failed for %s", record.get("buyer_id"))
+
+
 async def tick(now: datetime | None = None) -> list[str]:
     started: list[str] = []
+    if now is None:
+        try:
+            await _deletion_sweep()
+        except Exception:  # noqa: BLE001
+            logger.exception("deletion sweep failed")
     for record in due_buyers(now):
         try:
             job = await run_due_buyer(record, now)

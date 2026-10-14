@@ -37,12 +37,13 @@ from app.platforms import (
 )
 from app import postproxy
 from app.proof import build_proof_dashboard
+from app import growth_v2
 from app import run_guard
 from app import yt_proxy
 from app.store import public_config, set_last_run, update_setup
 
 SCAN_PROMPT = """You are scanning live public web results for ORIGINAL video clips this brand can cut today.
-{source_rules}{youtube_rule}
+{source_rules}{youtube_rule}{steering}
 Every source_url must be a real post permalink you found in search results — never a profile,
 search page, homepage, or invented ID.
 Never return a URL from this failed list: {failed}
@@ -236,6 +237,7 @@ async def scan_trends(
             if avoid_youtube
             else ""
         ),
+        steering=growth_v2.steering_text(str(record.get("buyer_id") or ""), brand),
     )
     grounded: list[dict[str, str]] = []
     try:
@@ -278,16 +280,21 @@ async def scan_trends(
         )
     skip = set(exclude_urls or [])
     candidates = order_candidates([c for c in candidates if c["source_url"] not in skip], avoid_youtube=avoid_youtube)
+    candidates, dropped = growth_v2.filter_candidates(str(record.get("buyer_id") or ""), candidates)
     top = candidates[0] if candidates else {}
     result: dict[str, Any] = {key: top.get(key) for key in SCAN_FIELDS}
     if not result.get("topic_tags"):
         result["topic_tags"] = []
     result["candidates"] = candidates
     result["grounded_urls"] = [item["source_url"] for item in grounded]
+    if dropped:
+        result["dropped_sources"] = dropped
     return result
 
 
 async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = False) -> dict[str, Any]:
+    if growth_v2.enabled() and not mock:
+        return await write_copy_v2(record, scan)
     platforms = effective_platforms(record)
     extras = topic_tags(scan.get("topic_tags") or [])
     locked = tuple(record.get("brand_hashtags") or ())
@@ -336,6 +343,63 @@ async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = 
     }
 
 
+async def write_copy_v2(record: dict[str, Any], scan: dict[str, Any]) -> dict[str, Any]:
+    """Growth V2 copy: AI hook title, short per-platform captions, on-screen commentary."""
+    platforms = [normalize_platform(str(p)) for p in effective_platforms(record)]
+    for extra in ("linkedin", "twitter", "tiktok", "youtube", "instagram"):
+        if extra not in platforms:
+            platforms.append(extra)  # captions for every platform the post may reach
+    brand = str(record.get("brand_name") or "")
+    website = str(record.get("website_url") or "")
+    extras = topic_tags(scan.get("topic_tags") or [])
+    raw = await generate_json(
+        record.get("gemini_api_key") or "",
+        growth_v2.COPY_PROMPT.format(
+            voice=record.get("brand_voice") or DEFAULT_BRAND_VOICE,
+            brand=brand or "the brand",
+            website=website,
+            title=scan.get("title") or "",
+            why=scan.get("why") or "",
+            notes=scan.get("notes") or "",
+            tags=", ".join(extras) or "(pick topical ones)",
+        ),
+        grounded=False,
+        models=GEMINI_COPY_MODELS,
+        budget_scope=str(record.get("buyer_id") or "anon"),
+    )
+    concept = growth_v2.sanitize_concept(raw, brand)
+    if not concept["hook"]:
+        concept["hook"] = growth_v2.clean_hook(scan.get("why") or scan.get("title") or "", brand)
+    if not concept["hashtags"]:
+        concept["hashtags"] = extras
+    source_url = str(scan.get("source_url") or "")
+    credit = growth_v2.creator_from_url(source_url) if scan.get("platform") != "brand" else ""
+    captions = growth_v2.build_captions(
+        concept,
+        platforms,
+        brand=brand,
+        website=website,
+        credit=credit,
+        source_url=source_url if scan.get("platform") != "brand" else "",
+        locked=list(record.get("brand_hashtags") or []),
+    )
+    copy = {
+        "title": concept["hook"],
+        "hook": concept["hook"],
+        "on_screen_hook": concept["on_screen_hook"],
+        "commentary": concept["commentary"],
+        "topic": concept["topic"],
+        "topic_tags": [t.lstrip("#") for t in growth_v2.normalize_tags(concept["hashtags"], None, brand)],
+        "locked_hashtags": list(record.get("brand_hashtags") or []),
+        "captions": captions,
+        "brand": brand,
+        "source_url": source_url,
+        "growth_v2": True,
+    }
+    copy["youtube_title"] = growth_v2.youtube_title_for(copy, brand)
+    return copy
+
+
 async def publish_cut(
     record: dict[str, Any],
     copy: dict[str, Any],
@@ -347,7 +411,18 @@ async def publish_cut(
 ) -> dict[str, Any]:
     key = record.get("postproxy_api_key") or ""
     group = record.get("postproxy_profile_group_id") or ""
+    buyer_key = str(record.get("buyer_id") or record.get("id") or "")
     indexed: dict[str, dict[str, Any]] = {}
+    if not mock and growth_v2.enabled():
+        safe_media, refusal = await asyncio.to_thread(
+            growth_v2.ensure_publishable, buyer_key, media, copy if isinstance(copy, dict) else {}
+        )
+        if safe_media is None:
+            growth_v2.add_alert(buyer_key, "raw_repost_refused", refusal)
+            return {"ok": False, "mocked": False, "posts": [], "refused_untransformed": True, "say_to_user": refusal}
+        media = safe_media
+        if isinstance(copy, dict) and copy.get("youtube_title"):
+            copy = {**copy, "youtube_title": growth_v2.youtube_title_for(copy, str(record.get("brand_name") or ""))}
     if not mock:
         try:
             indexed = postproxy.index_profiles(await postproxy.list_profiles(key, group))
@@ -423,6 +498,11 @@ async def publish_cut(
             continue
         for name in names:
             name = normalize_platform(name)
+            skip_until = growth_v2.platform_skipped(buyer_key, name)
+            if skip_until:
+                posts.append({"ok": False, "skipped": True, "aspect": aspect, "platform": name,
+                              "error": f"Skipped until {skip_until} after a PostProxy wallet/quota error."})
+                continue
             posts.append(
                 await _publish_one(
                     record,
@@ -434,7 +514,13 @@ async def publish_cut(
                     draft=draft,
                 )
             )
-    result = {"ok": True, "mocked": False, "batches": batches, "posts": posts}
+    result = {"ok": True, "mocked": False, "batches": batches, "posts": posts, "media": media}
+    if growth_v2.enabled():
+        for item in posts:
+            if not item.get("ok") and not item.get("skipped") and item.get("error"):
+                growth_v2.note_publish_error(buyer_key, str(item.get("platform") or ""), str(item.get("error")))
+            for note in growth_v2.deletion_notes(item.get("result")):
+                growth_v2.add_alert(buyer_key, "platform_deleted", note)
     if skipped:
         result["skipped_not_connected"] = skipped
     posted = [item for item in posts if item.get("ok")]
@@ -449,6 +535,16 @@ async def publish_cut(
                 media=media if isinstance(media, dict) else None,
             )
         except Exception:  # noqa: BLE001 — ledger must never change the post result
+            pass
+        try:
+            growth_v2.record_post(
+                buyer_key,
+                source_url=str((media or {}).get("source_url") or (copy or {}).get("source_url") or ""),
+                topic=str((copy or {}).get("topic") or ""),
+                hook=str((copy or {}).get("hook") or ""),
+                post_ids=[pid for pid in (postproxy.result_post_id(i.get("result")) for i in posted) if pid],
+            )
+        except Exception:  # noqa: BLE001
             pass
     if not draft and posts and len(posted) == len(posts):
         try:
@@ -679,6 +775,7 @@ async def run_autopilot(
     mock: bool = False,
     draft: bool = False,
     via: str = "manual",
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """scan → pull an original → copy → publish.
 
@@ -797,7 +894,37 @@ async def run_autopilot(
             code=skipped[-1]["code"] if skipped else "download_failed",
         )
     copy = await write_copy(record, scan, mock=mock)
+    if growth_v2.enabled() and not mock:
+        safe_media, refusal = await asyncio.to_thread(growth_v2.ensure_publishable, record["buyer_id"], media, copy)
+        if safe_media is None:
+            # Never post the raw download: fall back to an original brand clip.
+            skipped.append({"url": str(media.get("source_url") or ""), "code": "untransformed_refused", "error": refusal})
+            fallback = None
+            try:
+                fallback = await asyncio.to_thread(render_brand_clip, record["buyer_id"], record)
+            except MediaError as exc:
+                skipped.append({"url": "", "code": exc.code, "error": str(exc)[:300]})
+            if fallback is None:
+                raise MediaError(refusal, code="untransformed_refused")
+            media = fallback
+            scan = _brand_scan(record, str(media.get("source_url") or ""))
+            copy = await write_copy(record, scan, mock=mock)
+        else:
+            media = safe_media
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "published": False,
+            "scan": scan,
+            "media": {k: v for k, v in media.items() if k != "raw"},
+            "media_kind": growth_v2.classify_media(record["buyer_id"], media) if growth_v2.enabled() else "legacy",
+            "copy": copy,
+            "skipped_sources": skipped,
+        }
     published = await publish_cut(record, copy, media, mock=mock, draft=draft)
+    if isinstance(published.get("media"), dict):
+        media = published.pop("media")
     last_run = {
         "at": _stamp(),
         "mocked": mock,

@@ -4,6 +4,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import admin_secret
+
 from app import gemini_budget
 from app.gemini import generate_text
 from app.main import app
@@ -33,7 +35,8 @@ def test_health_lists_pack() -> None:
 def test_summary_endpoint() -> None:
     gemini_budget.consume("buyer-a")
     with TestClient(app) as client:
-        res = client.get("/api/gemini-daily-budget/summary")
+        assert client.get("/api/gemini-daily-budget/summary").status_code == 401
+        res = client.get("/api/gemini-daily-budget/summary", headers={"X-Admin-Secret": admin_secret()})
     assert res.status_code == 200
     body = res.json()
     assert body["pack"] == "gemini-daily-budget-v1"

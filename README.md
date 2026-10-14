@@ -178,3 +178,14 @@ Backend-only spend guard for Gemini `generateContent` calls (no page or UI chang
 
 Patterns (no code copied): ZhuoZhuoCrayon/throttled-py (MIT), laurentS/slowapi (MIT), Google AI Studio billing docs, olcayto-akbudak/retry-storm-simulator (MIT).
 
+
+## Growth V2 (default on)
+
+- No untransformed reposts: a downloaded original only posts after a hook, two commentary lines and a creator credit are burned into both masters (≤30s). If that fails, the run falls back to an original brand clip; a raw download is never published.
+- YouTube title = the AI hook (≤60 chars), never a job/scan name.
+- Captions: ~10-word hook + 1–2 short lines + 3–5 topic hashtags, no brand-name opener, no links on TikTok/YouTube/Instagram/Facebook; longer LinkedIn; short X.
+- Scan steering toward short "wow" clips for the brand; 14-day per-creator cooldown; repeat sources blocked.
+- Automation: max 2 attempts per slot (one retry ≥10 min later, same slot hour). PostProxy wallet/quota errors skip that platform 24h + alert. Deleted/removed posts raise alerts (`status` → `alerts`).
+- `dry_run` MCP tool and admin `POST /api/growth-v2/dry-run` build the next post without publishing.
+- Operator pack APIs (`/api/run-guard/*`, `/api/gemini-daily-budget/summary`, `/api/growth-v2/*`) need the admin secret (`X-Admin-Secret`).
+- Kill switches: `GROWTH_V2=0`, `GROWTH_V2_TRANSFORM=0`, `GROWTH_V2_MAX_SLOT_ATTEMPTS`, `GROWTH_V2_MAX_SECONDS`.

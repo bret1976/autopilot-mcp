@@ -9,6 +9,7 @@ from starlette.requests import Request
 
 from app.automation import automation_public
 from app.config import ONBOARD_PLATFORMS, public_base_url
+from app import growth_v2
 from app import postproxy
 from app.jobs import is_busy, load_job, spawn_job
 from app.media import MediaError, download_and_cut
@@ -504,6 +505,32 @@ async def run_autopilot_tool(
     return spawn_job(buyer_id, "run_autopilot", _job, {"source_url": source_url, "niche": niche})
 
 
+@mcp.tool
+async def dry_run(niche: str = "", source_url: str = "") -> dict[str, Any]:
+    """Build the next post (scan, clip, transformed video, title, captions) WITHOUT publishing or staging anything."""
+    record = current_record()
+    gate = blocked(record, need="run")
+    if gate:
+        return gate
+    buyer_id = record["buyer_id"]
+
+    async def _job() -> dict[str, Any]:
+        bind_buyer(buyer_id)
+        try:
+            return await run_autopilot(
+                load_buyer(buyer_id) or record,
+                niche=niche,
+                source_url=source_url,
+                mock=False,
+                dry_run=True,
+                via="dry_run",
+            )
+        except MediaError as exc:
+            return {"ok": False, "dry_run": True, "code": exc.code, "say_to_user": str(exc)}
+
+    return spawn_job(buyer_id, "dry_run", _job, {"niche": niche, "dry_run": True})
+
+
 def _apply_schedule_inputs(
     record: dict[str, Any],
     *,
@@ -706,6 +733,7 @@ async def status() -> dict[str, Any]:
     payload["job"] = load_job(record["buyer_id"])
     payload["busy"] = is_busy(record["buyer_id"])
     payload["defaults"]["platforms"] = effective_platforms(record)
+    payload["alerts"] = growth_v2.recent_alerts(record["buyer_id"])
     return payload
 
 

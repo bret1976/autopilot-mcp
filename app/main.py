@@ -45,6 +45,7 @@ from app.http_util import (
 )
 from app import automation
 from app import gemini_budget
+from app import growth_v2
 from app import order_guard
 from app import run_guard
 from app import yt_proxy
@@ -241,6 +242,7 @@ async def health():
         "order_guard": order_guard.summary(),
         "gemini_daily_budget": gemini_budget.summary(),
         "yt_proxy": yt_proxy.summary(),
+        "growth_v2": growth_v2.health(),
     }
 
 
@@ -790,21 +792,102 @@ async def buy_thanks(request: Request, session_id: str | None = Query(default=No
     )
 
 
+def _admin_request_ok(request: Request) -> bool:
+    """Operator APIs: X-Admin-Secret header, Bearer <admin secret>, or ?secret=."""
+    auth = request.headers.get("authorization") or ""
+    bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    for candidate in (request.headers.get("x-admin-secret"), bearer, request.query_params.get("secret")):
+        if _secret_ok((candidate or "").strip() or None):
+            return True
+    return False
+
+
+def _admin_required() -> JSONResponse:
+    return JSONResponse({"ok": False, "error": "unauthorized", "message": "Admin secret required."}, status_code=401)
+
+
 @app.get("/api/run-guard/summary")
-async def run_guard_summary():
-    """Backend pack status — no UI."""
+async def run_guard_summary(request: Request):
+    """Backend pack status — no UI. Admin only."""
+    if not _admin_request_ok(request):
+        return _admin_required()
     return run_guard.summary()
 
 
 @app.get("/api/gemini-daily-budget/summary")
-async def gemini_daily_budget_summary():
-    """Backend pack status — no UI."""
+async def gemini_daily_budget_summary(request: Request):
+    """Backend pack status — no UI. Admin only."""
+    if not _admin_request_ok(request):
+        return _admin_required()
     return gemini_budget.summary()
+
+
+@app.get("/api/growth-v2/status")
+async def growth_v2_status(request: Request, buyer_id: str = ""):
+    if not _admin_request_ok(request):
+        return _admin_required()
+    payload = {"ok": True, **growth_v2.health()}
+    if buyer_id:
+        state = growth_v2.load_state(clean_buyer_id(buyer_id))
+        payload["buyer"] = {
+            "alerts": state.get("alerts", [])[-20:],
+            "skip_until": state.get("skip_until", {}),
+            "history": state.get("history", [])[-20:],
+            "slots": dict(list(state.get("slots", {}).items())[-10:]),
+        }
+    return payload
+
+
+GROWTH_DRY_RUNS: dict[str, dict] = {}
+
+
+@app.post("/api/growth-v2/dry-run")
+async def growth_v2_dry_run(request: Request):
+    """Admin: build the next post for a buyer (scan, clip, transform, copy) WITHOUT publishing."""
+    if not _admin_request_ok(request):
+        return _admin_required()
+    import uuid
+
+    from app.spine import run_autopilot
+    from app.store import load_buyer
+
+    body = await _read_body(request)
+    buyer_id = clean_buyer_id(str(body.get("buyer_id") or ""))
+    record = load_buyer(buyer_id) if buyer_id else None
+    if not record:
+        return JSONResponse({"ok": False, "error": "unknown buyer"}, status_code=404)
+    job_id = uuid.uuid4().hex[:12]
+    GROWTH_DRY_RUNS[job_id] = {"status": "running", "buyer_id": buyer_id}
+
+    async def _run() -> None:
+        try:
+            result = await run_autopilot(
+                record,
+                niche=str(body.get("niche") or ""),
+                source_url=str(body.get("source_url") or ""),
+                dry_run=True,
+                via="dry_run",
+            )
+            GROWTH_DRY_RUNS[job_id] = {"status": "ok", "buyer_id": buyer_id, **result}
+        except Exception as exc:  # noqa: BLE001
+            GROWTH_DRY_RUNS[job_id] = {"status": "error", "buyer_id": buyer_id, "error": str(exc)[-800:]}
+
+    asyncio.create_task(_run())
+    return {"ok": True, "job_id": job_id, "status": "running"}
+
+
+@app.get("/api/growth-v2/dry-run/{job_id}")
+async def growth_v2_dry_run_status(request: Request, job_id: str):
+    if not _admin_request_ok(request):
+        return _admin_required()
+    return GROWTH_DRY_RUNS.get(job_id) or {"status": "not_found"}
 
 
 @app.post("/api/run-guard/check")
 async def run_guard_check(request: Request):
-    """Dry-run duplicate check for a proposed live publish."""
+    """Dry-run duplicate check for a proposed live publish. Admin only."""
+    if not _admin_request_ok(request):
+        return _admin_required()
     body = await _read_body(request)
     return run_guard.check_publish(
         buyer_id=str(body.get("buyer_id") or body.get("id") or "probe"),

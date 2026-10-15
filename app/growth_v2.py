@@ -32,7 +32,7 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger("growth_v2")
 
-VERSION = "2026-10-14.1"
+VERSION = "2026-10-14.2"
 MAX_HOOK_CHARS = 60
 CREATOR_COOLDOWN_DAYS = 14
 REPEAT_WINDOW_DAYS = 365
@@ -240,19 +240,36 @@ def build_captions(
     tags = normalize_tags(concept.get("hashtags") or concept.get("topic_tags"), locked, brand)
     tag_line = " ".join(tags)
     credit_line = f"Original clip: @{credit.lstrip('@')}" if credit else ""
-    short_body = "\n".join([hook] + lines + ([credit_line] if credit_line else []))
+    # Originals: series name on top, a comment question at the end (reposts keep the credit line instead).
+    question = ""
+    series = ""
+    if not credit:
+        q = _clean_line(concept.get("comment_question") or "", brand)
+        if q:
+            question = clamp_chars(q, 80)
+            question = question if question.endswith("?") else question.rstrip(".!") + "?"
+        if concept.get("series"):
+            series = str(concept["series"]).strip()
+            if concept.get("episode"):
+                series = f"{series} #{int(concept['episode'])}"
+    short_body = "\n".join(([series] if series else []) + [hook] + lines + ([credit_line] if credit_line else []) + ([question] if question else []))
     short = strip_links(f"{short_body}\n\n{tag_line}")
     angle = _clean_line(concept.get("linkedin_angle") or "", brand)
-    li_parts = [hook] + lines + ([angle] if angle else [])
+    li_parts = ([series] if series else []) + [hook] + lines + ([angle] if angle else [])
     if credit_line:
         li_parts.append(credit_line + (f" (source: {source_url})" if source_url else ""))
     if website:
         li_parts.append(website)
+    if question:
+        li_parts.append(question)
     linkedin = "\n\n".join(p for p in li_parts if p) + f"\n\n{tag_line}"
     x_tags = " ".join(tags[:2])
-    tweet = clamp_chars(f"{hook} {lines[0]}" if lines else hook, 280 - len(x_tags) - 2)
+    base = f"{hook} {lines[0]}" if lines else hook
+    if question and len(base) + len(question) + len(x_tags) + 4 <= 280:
+        base = f"{base} {question}"
+    tweet = clamp_chars(base, 280 - len(x_tags) - 2)
     twitter = strip_links(f"{tweet}\n\n{x_tags}".strip())
-    gbp = clamp_chars(" ".join([hook] + lines), 1400)
+    gbp = clamp_chars(" ".join([hook] + lines + ([question] if question else [])), 1400)
     out: dict[str, str] = {}
     for name in platforms:
         if name in SHORT_PLATFORMS:
@@ -343,17 +360,33 @@ def steering_text(buyer_id: str, brand: str) -> str:
     )
 
 
-def record_post(buyer_id: str, *, source_url: str, topic: str = "", hook: str = "", post_ids: list[str] | None = None) -> None:
+def origin_of(media_source: Any) -> str:
+    """'original' (AI-generated or the buyer's own brand clip) or 'repost' (someone else's clip)."""
+    src = str(media_source or "").lower()
+    if src in {"ai_generated", "brand_fallback"}:
+        return "original"
+    if not src:
+        return "unknown"
+    return "repost"
+
+
+def record_post(buyer_id: str, *, source_url: str, topic: str = "", hook: str = "", post_ids: list[str] | None = None,
+                topic_key: str = "", media_source: str = "", platforms: list[str] | None = None) -> None:
     state = load_state(buyer_id)
+    origin = origin_of(media_source)
     state["history"].append({
         "at": _utcnow().isoformat(),
         "source_url": source_url,
         "creator": creator_from_url(source_url),
         "topic": topic[:120],
+        "topic_key": topic_key[:120],
         "hook": hook[:120],
+        "media_source": media_source,
+        "origin": origin,
     })
     for pid in post_ids or []:
-        state["posted"].append({"id": pid, "at": _utcnow().isoformat(), "checked_at": None})
+        state["posted"].append({"id": pid, "at": _utcnow().isoformat(), "checked_at": None, "origin": origin,
+                                "media_source": media_source, "topic": topic[:120], "hook": hook[:120]})
     save_state(buyer_id, state)
 
 
@@ -524,7 +557,7 @@ def classify_media(buyer_id: str, media: dict[str, Any]) -> str:
     if media.get("transformed"):
         return "transformed"
     src = str(media.get("media_source") or "")
-    if src == "brand_fallback":
+    if src in {"brand_fallback", "ai_generated"}:
         return "original"
     if src == "growth_v2_transformed":
         return "transformed"
@@ -607,9 +640,20 @@ def ensure_publishable(buyer_id: str, media: dict[str, Any], copy: dict[str, Any
 _QUOTA_WORDS = ("wallet", "quota", "top up", "top-up", "insufficient", "credits", "payment required", "limit reached", "402")
 
 
+X_QUOTA_TOKENS = ("quota", "top up", "wallet", "24 hour", "24-hour", "tweet limit", "daily tweet", "byok")
+
+
+def is_x_quota_error(text: Any, platforms: list[str] | tuple[str, ...] | None = None) -> bool:
+    """The one shared X quota check. PostProxy's real X error (seen 2026-09-21):
+    "twitter: 24 hour Twitter quota exceeded. Top up your wallet to keep posting or consider using BYOK."."""
+    low = str(text or "").lower()
+    xish = "twitter" in low or low.startswith("x:") or any(str(p).lower() in {"twitter", "x"} for p in (platforms or []))
+    return xish and any(tok in low for tok in X_QUOTA_TOKENS)
+
+
 def is_quota_error(text: str) -> bool:
     low = (text or "").lower()
-    return any(w in low for w in _QUOTA_WORDS)
+    return is_x_quota_error(text) or any(w in low for w in _QUOTA_WORDS)
 
 
 def platform_skipped(buyer_id: str, platform: str, now: datetime | None = None) -> str:
@@ -623,12 +667,20 @@ def platform_skipped(buyer_id: str, platform: str, now: datetime | None = None) 
 
 def note_publish_error(buyer_id: str, platform: str, error: str) -> bool:
     """Wallet/quota: skip this platform for 24h + alert. Returns True when skipped."""
-    if not enabled() or not is_quota_error(error):
+    if not enabled():
+        return False
+    x_quota = is_x_quota_error(error, [platform])
+    if not x_quota and not is_quota_error(error):
         return False
     state = load_state(buyer_id)
     until = _utcnow() + timedelta(hours=PLATFORM_SKIP_HOURS)
     state["skip_until"][platform] = until.isoformat()
-    add_alert(buyer_id, "postproxy_quota", f"PostProxy wallet/quota error on {platform}; skipping {platform} for {PLATFORM_SKIP_HOURS}h. {error[:200]}", state)
+    if x_quota:
+        state["x_quota_until"] = until.isoformat()
+        add_alert(buyer_id, "x_quota_exhausted", "PostProxy reports the 24-hour X/Twitter quota is used up (wallet top-up needed). "
+                  f"X is skipped for {PLATFORM_SKIP_HOURS}h; other networks keep posting. {error[:200]}", state)
+    else:
+        add_alert(buyer_id, "postproxy_quota", f"PostProxy wallet/quota error on {platform}; skipping {platform} for {PLATFORM_SKIP_HOURS}h. {error[:200]}", state)
     save_state(buyer_id, state)
     return True
 
@@ -714,10 +766,145 @@ def slot_retry_due(buyer_id: str, slot: str, now: datetime | None = None) -> boo
     return bool(last and (now or _utcnow()) - last >= timedelta(seconds=SLOT_RETRY_SECONDS))
 
 
+# ---------------------------------------------------------------- metrics
+METRICS_MAX_AGE_DAYS = 30
+FOLLOWER_SNAPSHOT_HOURS = 6
+FOLLOWER_KEYS = ("followers_count", "follower_count", "followerCount", "followers", "subscriberCount", "subscriber_count", "fan_count")
+STAT_KEYS = {"likes": ("likes", "like_count", "likeCount", "reactions", "favorite_count"),
+             "comments": ("comments", "comment_count", "commentCount", "replies", "reply_count"),
+             "shares": ("shares", "share_count", "shareCount", "reposts", "retweets", "retweet_count")}
+
+
+def _first_int(stats: dict[str, Any], keys: tuple[str, ...]) -> int | None:
+    for key in keys:
+        if isinstance(stats, dict) and stats.get(key) is not None:
+            try:
+                return int(stats[key])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def normalize_stats(stats: dict[str, Any]) -> dict[str, Any]:
+    out = {name: _first_int(stats, keys) for name, keys in STAT_KEYS.items()}
+    if stats.get("impressions") is not None:
+        out["impressions"] = _first_int(stats, ("impressions",))
+    return out
+
+
+async def fetch_post_stats(api_key: str, post_ids: list[str]) -> dict[str, dict[str, dict[str, Any]]]:
+    """Latest PostProxy stats per post and platform (GET /posts/stats, 50 ids per call)."""
+    from app import postproxy
+
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    ids = [i for i in dict.fromkeys(post_ids) if i]
+    for start in range(0, len(ids), 50):
+        chunk = ids[start:start + 50]
+        try:
+            data = await postproxy._request("GET", "/posts/stats", api_key, params={"post_ids": ",".join(chunk)})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("GROWTH_V2 post stats fetch failed: %s", exc)
+            continue
+        body = data.get("data", data) if isinstance(data, dict) else {}
+        for pid, row in (body or {}).items() if isinstance(body, dict) else []:
+            for plat in (row or {}).get("platforms") or []:
+                records = plat.get("records") or []
+                if not records or not records[-1].get("stats"):
+                    continue
+                last = records[-1]
+                out.setdefault(str(pid), {})[str(plat.get("platform") or "")] = {
+                    **normalize_stats(last["stats"]), "recorded_at": last.get("recorded_at")}
+    return out
+
+
+async def snapshot_followers(record: dict[str, Any], state: dict[str, Any], force: bool = False) -> dict[str, Any] | None:
+    """Follower counts per platform from PostProxy profile stats, at most every 6 hours."""
+    from app import postproxy
+
+    last = _parse((state.get("followers") or {}).get("at"))
+    if not force and last and (_utcnow() - last).total_seconds() < FOLLOWER_SNAPSHOT_HOURS * 3600:
+        return None
+    key = record.get("postproxy_api_key") or ""
+    group = record.get("postproxy_profile_group_id") or ""
+    profiles = postproxy.as_rows(await postproxy.list_profiles(key, group))
+    snap: dict[str, Any] = {}
+    for prof in profiles:
+        pid = prof.get("id")
+        if not pid:
+            continue
+        try:
+            detail = await postproxy._request("GET", f"/profiles/{pid}", key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("GROWTH_V2 follower fetch failed for %s: %s", prof.get("platform"), exc)
+            continue
+        detail = detail.get("data", detail) if isinstance(detail, dict) else {}
+        platform = prof.get("platform") or detail.get("platform") or "unknown"
+        for entry in detail.get("latest_stats") or []:
+            value = _first_int((entry or {}).get("stats") or {}, FOLLOWER_KEYS)
+            if value is None:
+                continue
+            name = platform if not entry.get("placement_id") else f"{platform}:{entry['placement_id']}"
+            snap[name] = {"followers": value, "recorded_at": entry.get("recorded_at")}
+    record_at = _utcnow().isoformat()
+    state["followers"] = {"at": record_at, "by_platform": snap}
+    if snap:
+        hist = state.setdefault("follower_history", [])
+        hist.append({"at": record_at, **{k: v["followers"] for k, v in snap.items()}})
+        del hist[:-120]
+    return state["followers"]
+
+
+async def refresh_metrics(record: dict[str, Any], *, force_followers: bool = False) -> dict[str, Any]:
+    """Per-post likes/comments/shares (tagged original/repost) + a 6-hourly follower snapshot."""
+    buyer_id = str(record.get("buyer_id") or "")
+    key = record.get("postproxy_api_key") or ""
+    if not enabled() or not buyer_id or not key:
+        return {"ok": False, "skipped": True}
+    state = load_state(buyer_id)
+    cutoff = _utcnow() - timedelta(days=METRICS_MAX_AGE_DAYS)
+    rows = [r for r in state.get("posted", []) if r.get("id") and (_parse(r.get("at")) or _utcnow()) >= cutoff]
+    stats = await fetch_post_stats(key, [str(r["id"]) for r in rows])
+    updated = 0
+    for row in rows:
+        got = stats.get(str(row["id"]))
+        if got:
+            row["stats"] = got
+            row["stats_at"] = _utcnow().isoformat()
+            row.setdefault("origin", "unknown")
+            updated += 1
+    followers = None
+    try:
+        followers = await snapshot_followers(record, state, force=force_followers)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("GROWTH_V2 follower snapshot failed for %s: %s", buyer_id, exc)
+    state["metrics_at"] = _utcnow().isoformat()
+    save_state(buyer_id, state)
+    return {"ok": True, "posts_updated": updated, "followers": followers}
+
+
+def metrics_summary(state: dict[str, Any]) -> dict[str, Any]:
+    by_origin: dict[str, dict[str, int]] = {}
+    for row in state.get("posted", []):
+        bucket = by_origin.setdefault(str(row.get("origin") or "unknown"), {"posts": 0, "likes": 0, "comments": 0, "shares": 0})
+        bucket["posts"] += 1
+        for plat in (row.get("stats") or {}).values():
+            for name in ("likes", "comments", "shares"):
+                bucket[name] += int(plat.get(name) or 0)
+    return {"by_origin": by_origin, "followers": state.get("followers"), "metrics_at": state.get("metrics_at"),
+            "follower_history": state.get("follower_history", [])[-12:]}
+
+
 def health() -> dict[str, Any]:
+    from app import originals
+
     return {
         "enabled": enabled(),
         "version": VERSION,
+        "originals": originals.originals_enabled(),
+        "repost_fallback": originals.repost_fallback_enabled(),
+        "engine_ladder": originals.engine_ladder(),
+        "topic_dedupe_days": originals.TOPIC_DEDUPE_DAYS,
+        "follower_snapshot_hours": FOLLOWER_SNAPSHOT_HOURS,
         "transform": transform_enabled(),
         "max_slot_attempts": max_slot_attempts(),
         "max_seconds": max_seconds(),

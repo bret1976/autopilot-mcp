@@ -38,6 +38,7 @@ from app.platforms import (
 from app import postproxy
 from app.proof import build_proof_dashboard
 from app import growth_v2
+from app import originals
 from app import run_guard
 from app import yt_proxy
 from app.store import public_config, set_last_run, update_setup
@@ -543,6 +544,8 @@ async def publish_cut(
                 topic=str((copy or {}).get("topic") or ""),
                 hook=str((copy or {}).get("hook") or ""),
                 post_ids=[pid for pid in (postproxy.result_post_id(i.get("result")) for i in posted) if pid],
+                topic_key=str((copy or {}).get("topic_key") or ""),
+                media_source=str((media or {}).get("media_source") or ""),
             )
         except Exception:  # noqa: BLE001
             pass
@@ -776,8 +779,16 @@ async def run_autopilot(
     draft: bool = False,
     via: str = "manual",
     dry_run: bool = False,
+    force_veo_failures: int = 0,
+    force_mismatch: bool = False,
 ) -> dict[str, Any]:
-    """scan → pull an original → copy → publish.
+    """Growth V2 originals: plan → Veo → frame check → copy → publish (see app/originals.py).
+
+    The repost path below (scan → pull someone else's clip → transform) only runs when
+    GROWTH_V2_REPOST_FALLBACK=1, when a source_url is pinned, or with GROWTH_V2_ORIGINALS=0.
+    force_veo_failures / force_mismatch are test hooks honored only on dry runs.
+
+    Legacy path: scan → pull an original → copy → publish.
 
     YouTube bot-walls the Railway IP, so non-YouTube originals (X, direct, Vimeo, TikTok,
     Reddit) are tried first; once YouTube walls, every later YouTube candidate is skipped
@@ -795,6 +806,39 @@ async def run_autopilot(
     downloads = 0
     started = time.monotonic()
     last_scan: dict[str, Any] = {}
+    copy: dict[str, Any] | None = None
+    original_info: dict[str, Any] | None = None
+
+    if originals.originals_enabled() and not mock and not pinned:
+        try:
+            media, concept, original_info = await originals.produce_original(
+                record,
+                niche=niche,
+                force_veo_failures=max(0, int(force_veo_failures or 0)) if dry_run else 0,
+                force_mismatch=bool(force_mismatch) if dry_run else False,
+            )
+            platforms = [normalize_platform(str(p)) for p in effective_platforms(record)]
+            for extra in ("linkedin", "twitter", "tiktok", "youtube", "instagram"):
+                if extra not in platforms:
+                    platforms.append(extra)
+            copy = originals.copy_for_original(record, concept, platforms)
+            scan = {"title": concept.get("topic") or "", "source_url": "", "platform": "original",
+                    "why": concept.get("hook") or "", "topic_tags": copy.get("topic_tags") or [], "scanned": False,
+                    "original": True}
+        except originals.OriginalFailed as exc:
+            skipped.append({"url": "", "code": "originals_failed", "error": str(exc)[:1500]})
+            media = None
+            if not originals.repost_fallback_enabled():
+                # Repost backup is off: never skip the slot, post the buyer's own brand clip (also an original).
+                try:
+                    media = await asyncio.to_thread(render_brand_clip, record["buyer_id"], record)
+                    scan = _brand_scan(record, str(media.get("source_url") or ""))
+                except MediaError as brand_exc:
+                    skipped.append({"url": "", "code": brand_exc.code, "error": str(brand_exc)[:300]})
+                    raise MediaError(str(exc)[:800], code="originals_failed") from exc
+        queue_disabled = media is not None or not originals.repost_fallback_enabled()
+    else:
+        queue_disabled = False
 
     if pinned:
         queue.append(
@@ -811,7 +855,7 @@ async def run_autopilot(
             }
         )
 
-    while media is None and downloads < MAX_DOWNLOADS:
+    while media is None and not queue_disabled and downloads < MAX_DOWNLOADS:
         if time.monotonic() - started > CANDIDATE_BUDGET_SECONDS and not mock:
             break
         if not queue:
@@ -879,7 +923,7 @@ async def run_autopilot(
             skipped.append({"url": url, "code": exc.code, "error": str(exc)})
             continue
 
-    if media is None and not mock and _always_post():
+    if media is None and not mock and _always_post() and not queue_disabled:
         media, fallback_errors = await _fallback_media(record)
         skipped.extend(fallback_errors)
         if media is not None:
@@ -893,7 +937,8 @@ async def run_autopilot(
             + " Tried another original automatically. Call run_autopilot again without a source_url.",
             code=skipped[-1]["code"] if skipped else "download_failed",
         )
-    copy = await write_copy(record, scan, mock=mock)
+    if copy is None:
+        copy = await write_copy(record, scan, mock=mock)
     if growth_v2.enabled() and not mock:
         safe_media, refusal = await asyncio.to_thread(growth_v2.ensure_publishable, record["buyer_id"], media, copy)
         if safe_media is None:
@@ -920,6 +965,8 @@ async def run_autopilot(
             "media": {k: v for k, v in media.items() if k != "raw"},
             "media_kind": growth_v2.classify_media(record["buyer_id"], media) if growth_v2.enabled() else "legacy",
             "copy": copy,
+            "origin": growth_v2.origin_of(media.get("media_source")),
+            "original": {k: v for k, v in (original_info or {}).items() if k not in {"raw"}} or None,
             "skipped_sources": skipped,
         }
     published = await publish_cut(record, copy, media, mock=mock, draft=draft)

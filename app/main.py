@@ -834,6 +834,8 @@ async def growth_v2_status(request: Request, buyer_id: str = ""):
             "skip_until": state.get("skip_until", {}),
             "history": state.get("history", [])[-20:],
             "slots": dict(list(state.get("slots", {}).items())[-10:]),
+            "metrics": growth_v2.metrics_summary(state),
+            "x_quota_until": state.get("x_quota_until"),
         }
     return payload
 
@@ -866,6 +868,8 @@ async def growth_v2_dry_run(request: Request):
                 niche=str(body.get("niche") or ""),
                 source_url=str(body.get("source_url") or ""),
                 dry_run=True,
+                force_veo_failures=int(body.get("force_veo_failures") or 0),
+                force_mismatch=bool(body.get("force_mismatch")),
                 via="dry_run",
             )
             GROWTH_DRY_RUNS[job_id] = {"status": "ok", "buyer_id": buyer_id, **result}

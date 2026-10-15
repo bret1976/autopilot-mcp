@@ -78,8 +78,10 @@ def test_quota_error_skips_platform_and_alerts():
     assert g.note_publish_error("b2", "twitter", "PostProxy 402: wallet balance insufficient, top up")
     assert g.platform_skipped("b2", "twitter")
     assert not g.platform_skipped("b2", "linkedin")
+    assert g.recent_alerts("b2")[-1]["kind"] == "x_quota_exhausted"  # wallet error on X = the shared X quota check
+    assert g.note_publish_error("b2", "linkedin", "PostProxy 402: wallet balance insufficient, top up")
     assert g.recent_alerts("b2")[-1]["kind"] == "postproxy_quota"
-    assert not g.note_publish_error("b2", "linkedin", "PostProxy 500: boom")
+    assert not g.note_publish_error("b2", "facebook", "PostProxy 500: boom")
 
 
 def test_slot_retry_cap():

@@ -203,6 +203,11 @@ async def _deletion_sweep() -> None:
             await growth_v2.check_deletions(record)
         except Exception:  # noqa: BLE001
             logger.exception("deletion check failed for %s", record.get("buyer_id"))
+        try:
+            # Per-post likes/comments/shares + follower counts (every 6 hours, same sweep).
+            await growth_v2.refresh_metrics(record)
+        except Exception:  # noqa: BLE001
+            logger.exception("metrics refresh failed for %s", record.get("buyer_id"))
 
 
 async def tick(now: datetime | None = None) -> list[str]:

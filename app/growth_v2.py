@@ -247,10 +247,11 @@ def build_captions(
         if q:
             question = clamp_chars(q, 80)
             question = question if question.endswith("?") else question.rstrip(".!") + "?"
-    short_body = "\n".join([hook] + lines + ([credit_line] if credit_line else []) + ([question] if question else []))
+    title = "" if credit else " ".join(str(concept.get("title_line") or "").split())
+    short_body = "\n".join(([title] if title else []) + [hook] + lines + ([credit_line] if credit_line else []) + ([question] if question else []))
     short = strip_links(f"{short_body}\n\n{tag_line}")
     angle = _clean_line(concept.get("linkedin_angle") or "", brand)
-    li_parts = [hook] + lines + ([angle] if angle else [])
+    li_parts = ([title] if title else []) + [hook] + lines + ([angle] if angle else [])
     if credit_line:
         li_parts.append(credit_line + (f" (source: {source_url})" if source_url else ""))
     if website:
@@ -260,6 +261,8 @@ def build_captions(
     linkedin = "\n\n".join(p for p in li_parts if p) + f"\n\n{tag_line}"
     x_tags = " ".join(tags[:2])
     base = f"{hook} {lines[0]}" if lines else hook
+    if title and len(title) + len(base) + len(x_tags) + 6 <= 280:
+        base = f"{title}: {base}"
     if question and len(base) + len(question) + len(x_tags) + 4 <= 280:
         base = f"{base} {question}"
     tweet = clamp_chars(base, 280 - len(x_tags) - 2)
@@ -366,7 +369,8 @@ def origin_of(media_source: Any) -> str:
 
 
 def record_post(buyer_id: str, *, source_url: str, topic: str = "", hook: str = "", post_ids: list[str] | None = None,
-                topic_key: str = "", media_source: str = "", platforms: list[str] | None = None) -> None:
+                topic_key: str = "", media_source: str = "", platforms: list[str] | None = None,
+                title_line: str = "") -> None:
     state = load_state(buyer_id)
     origin = origin_of(media_source)
     state["history"].append({
@@ -376,6 +380,7 @@ def record_post(buyer_id: str, *, source_url: str, topic: str = "", hook: str = 
         "topic": topic[:120],
         "topic_key": topic_key[:120],
         "hook": hook[:120],
+        "title_line": title_line[:80],
         "media_source": media_source,
         "origin": origin,
     })

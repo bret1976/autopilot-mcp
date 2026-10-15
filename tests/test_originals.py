@@ -31,6 +31,7 @@ def _concept(topic: str, n: int = 0) -> dict:
         "shot_list": [{"t": "0-1s", "shows": "a spark with a crack"}], "on_screen_hook": f"{1000 + n} degrees in 2s",
         "hook": f"Watch {topic} happen in 2 seconds", "lines": ["It is real."], "hashtags": ["#Science"],
         "comment_question": "Would you touch it",
+        "title_line": f"The {topic} Showdown",
     })
 
 
@@ -52,17 +53,43 @@ def test_topic_dedupe_loose():
     assert o.is_recent_topic({"topic": "Tesla turbine"}, o.recent_topics("t1")) is None
 
 
-def test_captions_no_series_line_but_question():
+def test_captions_one_unique_title_line_shared_across_platforms():
     c = {**_concept("Thermite"), "series": "Wow in 8 Seconds", "episode": 3}
-    caps = g.build_captions(c, ["tiktok", "linkedin", "twitter", "youtube"], brand="DCRBN")
+    caps = g.build_captions(c, ["tiktok", "youtube", "instagram", "facebook", "linkedin", "twitter"], brand="DCRBN")
     for text in caps.values():
         assert "Wow in 8 Seconds" not in text and "#3" not in text
         assert "Would you touch it?" in text
-    assert caps["tiktok"].splitlines()[0] == c["hook"]
-    assert caps["linkedin"].split("\n\n")[0] == c["hook"]
+        assert text.startswith("The Thermite Showdown")  # same top line on every platform
+    assert caps["tiktok"].splitlines()[1] == c["hook"]
     assert not hasattr(o, "series_name") and not hasattr(o, "DEFAULT_SERIES")
     copy = o.copy_for_original(RECORD, _concept("Thermite"), ["tiktok"])
-    assert "series" not in copy and "episode" not in copy
+    assert "series" not in copy and "episode" not in copy and copy["title_line"] == "The Thermite Showdown"
+
+
+def test_title_cleaning_and_repeat_check():
+    assert o.clean_title("Episode 4: Molten Rail Magic #4") == "Molten Rail Magic"
+    assert o.title_repeats("Molten rail magic!", ["molten Rail Magic"])
+    assert o.title_repeats("The Molten Rail Magic", ["Molten Rail Magic"])
+    assert o.title_repeats("", []) == "(empty)"
+    assert o.title_repeats("Glass That Fights Back", ["Molten Rail Magic"]) is None
+    g.record_post("t1", source_url="", topic="Rail weld", media_source="ai_generated", title_line="Molten Rail Magic")
+    assert o.recent_titles("t1") == ["Molten Rail Magic"]
+
+
+def test_plan_concept_rejects_repeated_title(monkeypatch):
+    g.record_post("t1", source_url="", topic="old", media_source="ai_generated", title_line="The Glass Showdown")
+    replies = iter([
+        {**_concept("Glass"), "title_line": "The Glass Showdown", "veo_prompt": "p", "hook": "Watch glass break in 2 seconds"},
+        {**_concept("Ferrofluid"), "veo_prompt": "p", "hook": "Watch ferrofluid spike in 2 seconds"},
+    ])
+    import json as _json
+
+    async def fake_text(key, prompt, **kw):
+        return _json.dumps(next(replies))
+
+    monkeypatch.setattr("app.gemini.generate_text", fake_text)
+    c = _run(o.plan_concept(RECORD))
+    assert c["title_line"] == "The Ferrofluid Showdown"
 
 
 def test_x_quota_shared_check():

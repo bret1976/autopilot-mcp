@@ -52,12 +52,17 @@ def test_topic_dedupe_loose():
     assert o.is_recent_topic({"topic": "Tesla turbine"}, o.recent_topics("t1")) is None
 
 
-def test_captions_have_series_and_question():
+def test_captions_no_series_line_but_question():
     c = {**_concept("Thermite"), "series": "Wow in 8 Seconds", "episode": 3}
-    caps = g.build_captions(c, ["tiktok", "linkedin", "twitter"], brand="DCRBN")
-    assert caps["tiktok"].splitlines()[0] == "Wow in 8 Seconds #3"
-    assert caps["tiktok"].split("\n\n")[0].rstrip().endswith("Would you touch it?")
-    assert "Would you touch it?" in caps["linkedin"] and "Would you touch it?" in caps["twitter"]
+    caps = g.build_captions(c, ["tiktok", "linkedin", "twitter", "youtube"], brand="DCRBN")
+    for text in caps.values():
+        assert "Wow in 8 Seconds" not in text and "#3" not in text
+        assert "Would you touch it?" in text
+    assert caps["tiktok"].splitlines()[0] == c["hook"]
+    assert caps["linkedin"].split("\n\n")[0] == c["hook"]
+    assert not hasattr(o, "series_name") and not hasattr(o, "DEFAULT_SERIES")
+    copy = o.copy_for_original(RECORD, _concept("Thermite"), ["tiktok"])
+    assert "series" not in copy and "episode" not in copy
 
 
 def test_x_quota_shared_check():

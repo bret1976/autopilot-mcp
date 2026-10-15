@@ -545,6 +545,7 @@ async def publish_cut(
                 hook=str((copy or {}).get("hook") or ""),
                 post_ids=[pid for pid in (postproxy.result_post_id(i.get("result")) for i in posted) if pid],
                 topic_key=str((copy or {}).get("topic_key") or ""),
+                title_line=str((copy or {}).get("title_line") or ""),
                 media_source=str((media or {}).get("media_source") or ""),
             )
         except Exception:  # noqa: BLE001

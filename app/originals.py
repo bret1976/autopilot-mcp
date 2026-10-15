@@ -161,6 +161,9 @@ say this explicitly at the end of veo_prompt.
 Return ONLY JSON with these keys:
   topic: short name
   topic_key: 3-6 lowercase words identifying the subject
+  title_line: the caption's top title, 2-6 words, punchy and show-like (think an episode title), written for THIS
+        video's specific subject and action; no numbering, no "#", no series or brand name, no hashtags or emoji.
+        It must be clearly different from every one of these earlier titles: {avoid_titles}
   shot_list: array of exactly 3 beats, each {{"t": "0-1s" | "1-5s" | "5-8s", "shows": concrete visible action}};
         the 0-1s beat names the sound effect, the 5-8s beat ends back near the opening composition.
         Each beat must be something a camera can literally see.
@@ -177,6 +180,55 @@ Return ONLY JSON with these keys:
 
 Do NOT reuse any of these recent topics (or anything close): {avoid}
 """
+
+
+TITLE_REPEAT_DAYS = 365
+_TITLE_JUNK = re.compile(r"(?:\b(?:episode|ep\.?|part|series)\s*\d*\b|#\s*\d+|\bno\.\s*\d+)", re.I)
+
+
+def clean_title(value: Any, brand: str = "") -> str:
+    """Per-post top title: 2-6 words, no numbering/series markers."""
+    t = growth_v2._clean_line(value or "", brand).strip("\"'\u201c\u201d")
+    t = _TITLE_JUNK.sub("", t)
+    t = " ".join(t.split()).strip(" -:\u2013\u2014|.")
+    words = t.split()
+    if len(words) > 6:
+        t = " ".join(words[:6])
+    return growth_v2.clamp_chars(t, 48)
+
+
+def _title_key(text: Any) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", str(text or "").lower()))
+
+
+def recent_titles(buyer_id: str, days: int = TITLE_REPEAT_DAYS) -> list[str]:
+    from datetime import timedelta
+
+    state = growth_v2.load_state(buyer_id)
+    cutoff = growth_v2._utcnow() - timedelta(days=days)
+    out = []
+    for row in state.get("history", []):
+        at = growth_v2._parse(row.get("at"))
+        if row.get("title_line") and (not at or at >= cutoff):
+            out.append(str(row["title_line"]))
+    return out[-200:]
+
+
+def title_repeats(title: str, earlier: list[str]) -> str | None:
+    """Exact (normalized) match or near-identical wording to an earlier post's title."""
+    key = _title_key(title)
+    if not key:
+        return "(empty)"
+    for prev in earlier:
+        pk = _title_key(prev)
+        if not pk:
+            continue
+        if key == pk:
+            return prev
+        a, b = set(key.split()), set(pk.split())
+        if len(a & b) / max(1, min(len(a), len(b))) >= 0.8 and min(len(a), len(b)) >= 2:
+            return prev
+    return None
 
 
 def has_number(text: Any) -> bool:
@@ -223,6 +275,7 @@ def sanitize_concept(raw: Any, brand: str = "") -> dict[str, Any]:
         "hashtags": raw.get("hashtags") or [],
         "linkedin_angle": growth_v2.clamp_chars(growth_v2._clean_line(raw.get("linkedin_angle") or "", brand), 220),
         "comment_question": _clean_question(raw.get("comment_question")),
+        "title_line": clean_title(raw.get("title_line"), brand),
         "commentary": [],
     }
 
@@ -235,6 +288,7 @@ async def plan_concept(record: dict[str, Any], tried: list[dict[str, Any]] | Non
     brand = str(record.get("brand_name") or "")
     recent = recent_topics(buyer_id) + [c.get("topic") or "" for c in (tried or []) if c]
     avoid = list(dict.fromkeys(t for t in recent if t))[:60]
+    titles = recent_titles(buyer_id) + [c.get("title_line") or "" for c in (tried or []) if c and c.get("title_line")]
     last_error = "no concept"
     for _ in range(3):
         prompt = CONCEPT_PROMPT.format(
@@ -243,6 +297,7 @@ async def plan_concept(record: dict[str, Any], tried: list[dict[str, Any]] | Non
             niche=niche or record.get("niche") or record.get("brand_description") or "the brand's audience",
             voice=record.get("brand_voice") or "plain, curious, confident",
             avoid=", ".join(avoid) or "none yet",
+            avoid_titles="; ".join(titles[-40:]) or "none yet",
         )
         try:
             text = await generate_text(_api_key(record), prompt, models=CONCEPT_MODELS, budget_scope=buyer_id or "anon")
@@ -259,6 +314,11 @@ async def plan_concept(record: dict[str, Any], tried: list[dict[str, Any]] | Non
         if dup:
             last_error = f"topic {concept['topic']!r} too close to recent {dup!r}"
             avoid.append(concept["topic"])
+            continue
+        rep_title = title_repeats(concept.get("title_line") or "", titles)
+        if rep_title:
+            last_error = f"title {concept.get('title_line')!r} repeats earlier title {rep_title!r}"
+            titles.append(concept.get("title_line") or "")
             continue
         if not has_number(concept["on_screen_hook"]):
             if has_number(concept["hook"]):
@@ -435,6 +495,7 @@ def extract_frames(path: Path, count: int = 5, width: int = 512) -> list[bytes]:
 # ---------------------------------------------------------------- frame check (never publish a mismatch)
 MATCH_PROMPT = """These {n} frames are sampled in order from an 8-second AI-generated video.
 The post will be published with this on-screen hook and caption:
+  title_line: "{title_line}"
   on_screen_hook: "{on_screen_hook}"
   hook: "{hook}"
   lines: {lines}
@@ -447,6 +508,7 @@ Return ONLY JSON:
   mismatches: array of short strings (claims not shown),
   rewrite: if matches is false, a corrected caption that describes ONLY what is shown, still factual and
            curiosity-driven: {{"on_screen_hook": max 6 words AND must contain one factually correct number in digits,
+           "title_line": 2-6 word punchy title for what is shown, no numbering,
            "hook": 8-10 words max 60 chars no emoji/hashtags, "lines": 1-2 lines under 100 chars}}; otherwise null."""
 
 
@@ -473,7 +535,8 @@ async def verify_clip_matches(record: dict[str, Any], raw: Path, concept: dict[s
     if not frames:
         raise OriginalFailed("caption check: could not extract frames")
     prompt = MATCH_PROMPT.format(n=len(frames), on_screen_hook=concept.get("on_screen_hook", ""),
-                                 hook=concept.get("hook", ""), lines=json.dumps(concept.get("lines") or []))
+                                 hook=concept.get("hook", ""), lines=json.dumps(concept.get("lines") or []),
+                                 title_line=concept.get("title_line", ""))
     result = await vision_json(record, prompt, frames)
     if not isinstance(result, dict) or "matches" not in result:
         raise OriginalFailed("caption check: unusable verifier response")
@@ -490,7 +553,7 @@ async def verify_clip_matches(record: dict[str, Any], raw: Path, concept: dict[s
     return result
 
 
-def apply_caption_rewrite(concept: dict[str, Any], rewrite: Any, brand: str = "") -> dict[str, Any] | None:
+def apply_caption_rewrite(concept: dict[str, Any], rewrite: Any, brand: str = "", earlier_titles: list[str] | None = None) -> dict[str, Any] | None:
     if not isinstance(rewrite, dict):
         return None
     hook = growth_v2.clean_hook(rewrite.get("hook") or "", brand)
@@ -506,6 +569,9 @@ def apply_caption_rewrite(concept: dict[str, Any], rewrite: Any, brand: str = ""
         if num:
             on_screen = growth_v2.clamp_chars(f"{num.group(0).strip()}: {on_screen}".strip(": "), 40)
     fixed = dict(concept)
+    new_title = clean_title(rewrite.get("title_line"), brand)
+    if new_title and not title_repeats(new_title, list(earlier_titles or [])):
+        fixed["title_line"] = new_title
     fixed.update({"hook": hook, "lines": lines, "on_screen_hook": on_screen, "caption_rewritten_from_frames": True,
                   "original_caption": {"hook": concept.get("hook"), "lines": concept.get("lines"),
                                        "on_screen_hook": concept.get("on_screen_hook")}})
@@ -518,7 +584,7 @@ async def ensure_caption_matches(record: dict[str, Any], raw: Path, concept: dic
     first = await verify_clip_matches(record, raw, concept, force_mismatch=force_mismatch)
     if first["matches"]:
         return concept, {"caption_check": "match", "visible_summary": first.get("visible_summary")}
-    fixed = apply_caption_rewrite(concept, first.get("rewrite"), brand)
+    fixed = apply_caption_rewrite(concept, first.get("rewrite"), brand, recent_titles(str(record.get("buyer_id") or "")))
     if not fixed:
         raise OriginalFailed(f"caption mismatch, no usable rewrite: {first.get('mismatches')} | shown: {first.get('visible_summary')}")
     if not has_number(fixed.get("on_screen_hook")):
@@ -615,6 +681,7 @@ def copy_for_original(record: dict[str, Any], concept: dict[str, Any], platforms
         "growth_v2": True,
         "origin": "original",
         "comment_question": concept.get("comment_question") or "",
+        "title_line": concept.get("title_line") or "",
         "shot_list": concept.get("shot_list") or [],
         "caption_rewritten_from_frames": bool(concept.get("caption_rewritten_from_frames")),
         "original_caption": concept.get("original_caption"),

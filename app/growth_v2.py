@@ -240,22 +240,17 @@ def build_captions(
     tags = normalize_tags(concept.get("hashtags") or concept.get("topic_tags"), locked, brand)
     tag_line = " ".join(tags)
     credit_line = f"Original clip: @{credit.lstrip('@')}" if credit else ""
-    # Originals: series name on top, a comment question at the end (reposts keep the credit line instead).
+    # Originals: a comment question at the end (reposts keep the credit line instead).
     question = ""
-    series = ""
     if not credit:
         q = _clean_line(concept.get("comment_question") or "", brand)
         if q:
             question = clamp_chars(q, 80)
             question = question if question.endswith("?") else question.rstrip(".!") + "?"
-        if concept.get("series"):
-            series = str(concept["series"]).strip()
-            if concept.get("episode"):
-                series = f"{series} #{int(concept['episode'])}"
-    short_body = "\n".join(([series] if series else []) + [hook] + lines + ([credit_line] if credit_line else []) + ([question] if question else []))
+    short_body = "\n".join([hook] + lines + ([credit_line] if credit_line else []) + ([question] if question else []))
     short = strip_links(f"{short_body}\n\n{tag_line}")
     angle = _clean_line(concept.get("linkedin_angle") or "", brand)
-    li_parts = ([series] if series else []) + [hook] + lines + ([angle] if angle else [])
+    li_parts = [hook] + lines + ([angle] if angle else [])
     if credit_line:
         li_parts.append(credit_line + (f" (source: {source_url})" if source_url else ""))
     if website:

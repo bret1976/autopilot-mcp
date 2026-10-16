@@ -237,12 +237,14 @@ async def health():
             "run_guard": run_guard.PACK,
             "order_guard": order_guard.PACK,
             "gemini_daily_budget": gemini_budget.PACK,
+            "growth_metrics_fix": growth_v2.METRICS_FIX_PACK,
         },
         "run_guard": run_guard.summary(),
         "order_guard": order_guard.summary(),
         "gemini_daily_budget": gemini_budget.summary(),
         "yt_proxy": yt_proxy.summary(),
         "growth_v2": growth_v2.health(),
+        "growth_metrics_fix": growth_v2.metrics_fix_summary(),
     }
 
 
@@ -820,6 +822,14 @@ async def gemini_daily_budget_summary(request: Request):
     if not _admin_request_ok(request):
         return _admin_required()
     return gemini_budget.summary()
+
+
+@app.get("/api/growth-metrics-fix/summary")
+async def growth_metrics_fix_summary(request: Request):
+    """Backend pack status — no UI. Admin only (same counters are on /health)."""
+    if not _admin_request_ok(request):
+        return _admin_required()
+    return growth_v2.metrics_fix_summary()
 
 
 @app.get("/api/growth-v2/status")

@@ -792,8 +792,73 @@ def normalize_stats(stats: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# growth-metrics-fix-v1: PostProxy's API lives under /api. The metrics sweep called
+# /posts/stats and /profiles/{id} without it, which PostProxy answers with
+# 401 "Invalid API key" even for a valid key, so follower counts never landed.
+# GROWTH_METRICS_FIX=0 restores the old paths and 6-hour gate exactly (kill switch).
+METRICS_FIX_PACK = "growth-metrics-fix-v1"
+_METRICS_LOCK = threading.Lock()
+_METRICS: dict[str, Any] = {
+    "followers": {"ok": 0, "failed": 0, "last_ok_at": None, "last_error": None, "last_error_at": None},
+    "post_stats": {"ok": 0, "failed": 0, "last_ok_at": None, "last_error": None, "last_error_at": None},
+    "auth_short_circuits": 0,
+}
+
+
+def metrics_fix_enabled() -> bool:
+    return _env("GROWTH_METRICS_FIX", "1") not in {"0", "false", "no", "off"}
+
+
+def _api_path(path: str) -> str:
+    return path if not metrics_fix_enabled() or path.startswith("/api/") else f"/api{path}"
+
+
+def profile_detail_path(profile_id: Any) -> str:
+    return _api_path(f"/profiles/{profile_id}")
+
+
+POST_STATS_PATH = "/posts/stats"  # resolved per call through _api_path
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    if not metrics_fix_enabled():
+        return False
+    text = str(exc)
+    hit = text.startswith("PostProxy 401") or text.startswith("PostProxy 403")
+    if hit:
+        with _METRICS_LOCK:
+            _METRICS["auth_short_circuits"] += 1
+    return hit
+
+
+def _metrics_note(kind: str, *, ok: bool, error: Exception | None = None) -> None:
+    now = _utcnow().isoformat()
+    with _METRICS_LOCK:
+        row = _METRICS[kind]
+        if ok:
+            row["ok"] += 1
+            row["last_ok_at"] = now
+        else:
+            row["failed"] += 1
+            # status line only (e.g. "PostProxy 401"), never the body or any key
+            row["last_error"] = str(error or "")[:40].split(":")[0]
+            row["last_error_at"] = now
+
+
+def metrics_fix_summary() -> dict[str, Any]:
+    with _METRICS_LOCK:
+        counts = json.loads(json.dumps(_METRICS))
+    return {
+        "pack": METRICS_FIX_PACK,
+        "enabled": metrics_fix_enabled(),
+        "profile_detail_path": profile_detail_path("{id}"),
+        "post_stats_path": _api_path(POST_STATS_PATH),
+        "since_boot": counts,
+    }
+
+
 async def fetch_post_stats(api_key: str, post_ids: list[str]) -> dict[str, dict[str, dict[str, Any]]]:
-    """Latest PostProxy stats per post and platform (GET /posts/stats, 50 ids per call)."""
+    """Latest PostProxy stats per post and platform (GET /api/posts/stats, 50 ids per call)."""
     from app import postproxy
 
     out: dict[str, dict[str, dict[str, Any]]] = {}
@@ -801,10 +866,14 @@ async def fetch_post_stats(api_key: str, post_ids: list[str]) -> dict[str, dict[
     for start in range(0, len(ids), 50):
         chunk = ids[start:start + 50]
         try:
-            data = await postproxy._request("GET", "/posts/stats", api_key, params={"post_ids": ",".join(chunk)})
+            data = await postproxy._request("GET", _api_path(POST_STATS_PATH), api_key, params={"post_ids": ",".join(chunk)})
         except Exception as exc:  # noqa: BLE001
+            _metrics_note("post_stats", ok=False, error=exc)
             logger.warning("GROWTH_V2 post stats fetch failed: %s", exc)
+            if _is_auth_error(exc):
+                break  # same key for every chunk: don't repeat a call that can't succeed
             continue
+        _metrics_note("post_stats", ok=True)
         body = data.get("data", data) if isinstance(data, dict) else {}
         for pid, row in (body or {}).items() if isinstance(body, dict) else []:
             for plat in (row or {}).get("platforms") or []:
@@ -821,8 +890,11 @@ async def snapshot_followers(record: dict[str, Any], state: dict[str, Any], forc
     """Follower counts per platform from PostProxy profile stats, at most every 6 hours."""
     from app import postproxy
 
-    last = _parse((state.get("followers") or {}).get("at"))
-    if not force and last and (_utcnow() - last).total_seconds() < FOLLOWER_SNAPSHOT_HOURS * 3600:
+    prev = state.get("followers") or {}
+    last = _parse(prev.get("at"))
+    # An empty previous snapshot captured nothing, so it doesn't hold the 6-hour gate.
+    got_data = bool(prev.get("by_platform")) or not metrics_fix_enabled()
+    if not force and got_data and last and (_utcnow() - last).total_seconds() < FOLLOWER_SNAPSHOT_HOURS * 3600:
         return None
     key = record.get("postproxy_api_key") or ""
     group = record.get("postproxy_profile_group_id") or ""
@@ -833,10 +905,14 @@ async def snapshot_followers(record: dict[str, Any], state: dict[str, Any], forc
         if not pid:
             continue
         try:
-            detail = await postproxy._request("GET", f"/profiles/{pid}", key)
+            detail = await postproxy._request("GET", profile_detail_path(pid), key)
         except Exception as exc:  # noqa: BLE001
+            _metrics_note("followers", ok=False, error=exc)
             logger.warning("GROWTH_V2 follower fetch failed for %s: %s", prof.get("platform"), exc)
+            if _is_auth_error(exc):
+                break  # same key for every profile: stop after the first auth failure
             continue
+        _metrics_note("followers", ok=True)
         detail = detail.get("data", detail) if isinstance(detail, dict) else {}
         platform = prof.get("platform") or detail.get("platform") or "unknown"
         for entry in detail.get("latest_stats") or []:

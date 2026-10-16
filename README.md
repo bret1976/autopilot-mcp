@@ -179,6 +179,22 @@ Backend-only spend guard for Gemini `generateContent` calls (no page or UI chang
 Patterns (no code copied): ZhuoZhuoCrayon/throttled-py (MIT), laurentS/slowapi (MIT), Google AI Studio billing docs, olcayto-akbudak/retry-storm-simulator (MIT).
 
 
+## Growth Metrics Fix (growth-metrics-fix-v1)
+
+Backend only. The Growth V2 metrics sweep read PostProxy at `/posts/stats` and
+`/profiles/{id}`; PostProxy's API lives under `/api`, and it answers those
+paths with `401 Invalid API key` even for a valid key, so follower counts and
+per-post stats never landed. The sweep now calls `/api/posts/stats` and
+`/api/profiles/{id}` (read-only GETs), stops after the first 401/403 for a
+buyer instead of repeating it for every profile/chunk, and treats an empty
+previous follower snapshot as "not captured yet" so the 6-hour gate doesn't
+hold it.
+
+- Status: `/health` → `packs.growth_metrics_fix`, `growth_metrics_fix` counters
+  (ok/failed per kind, last status line only, never bodies or keys);
+  admin `GET /api/growth-metrics-fix/summary`.
+- Kill switch: `GROWTH_METRICS_FIX=0` restores the old paths and gate exactly.
+
 ## Growth V2 (default on)
 
 - No untransformed reposts: a downloaded original only posts after a hook, two commentary lines and a creator credit are burned into both masters (≤30s). If that fails, the run falls back to an original brand clip; a raw download is never published.

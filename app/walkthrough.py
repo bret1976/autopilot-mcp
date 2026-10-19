@@ -19,6 +19,7 @@ STEP_RUN = 8
 
 ASK_WEBSITE = "ask_website"
 ASK_APIS = "ask_apis"
+ASK_CHANNELS = "ask_channels"
 ASK_SCHEDULE = "ask_schedule"
 CONFIRM_SCHEDULE = "confirm_schedule"
 CHOOSE_START = "choose_start"
@@ -65,6 +66,11 @@ def has_apis(record: dict[str, Any]) -> bool:
     )
 
 
+def channels_chosen(record: dict[str, Any]) -> bool:
+    """Picked in onboarding, or an existing account that set its platforms / passed this point before."""
+    return bool(record.get("channels_chosen") or record.get("platforms_set_by_user") or record.get("schedule_set_by_user"))
+
+
 def schedule_set_by_user(record: dict[str, Any]) -> bool:
     return bool(record.get("schedule_set_by_user"))
 
@@ -83,6 +89,8 @@ def infer_step(record: dict[str, Any]) -> str:
         return ASK_WEBSITE
     if not has_apis(record):
         return ASK_APIS
+    if not channels_chosen(record):
+        return ASK_CHANNELS
     if not schedule_set_by_user(record):
         return ASK_SCHEDULE
     if not schedule_confirmed(record):
@@ -98,6 +106,7 @@ def step_number(name: str) -> int:
     return {
         ASK_WEBSITE: STEP_WEBSITE,
         ASK_APIS: STEP_APIS,
+        ASK_CHANNELS: STEP_APIS,
         ASK_SCHEDULE: STEP_SCHEDULE,
         CONFIRM_SCHEDULE: STEP_CONFIRM,
         CHOOSE_START: STEP_CHOOSE,
@@ -238,6 +247,15 @@ def say_for_step(record: dict[str, Any], step: str) -> str:
             "3. PostProxy profile group ID\n\n"
             "Call setup with those three values. Keys are never printed back."
         )
+    if step == ASK_CHANNELS:
+        return (
+            "Step 4b — The three APIs are saved and PostProxy is connected.\n\n"
+            "Which channels should Autopost post to? Pick any of: "
+            "YouTube, TikTok, Instagram, LinkedIn, X.\n"
+            "Channels connected in your PostProxy are marked connected.\n\n"
+            "Call choose_channels with the channels they pick. Posts only go to those channels. "
+            "They can change this later with choose_channels."
+        )
     if step == ASK_SCHEDULE:
         return (
             "Step 5 — The three APIs are saved.\n\n"
@@ -288,6 +306,10 @@ def say_for_step(record: dict[str, Any], step: str) -> str:
 
 
 def choices_for_step(step: str) -> list[dict[str, str]]:
+    if step == ASK_CHANNELS:
+        from app.config import CHANNEL_CHOICES
+
+        return [{"id": cid, "label": label, "multi_select": "true"} for cid, label in CHANNEL_CHOICES]
     if step == CONFIRM_SCHEDULE:
         return [{"id": "confirm_schedule", "label": "Confirm schedule"}]
     if step == CHOOSE_START:
@@ -299,6 +321,7 @@ def next_tool_for_step(step: str) -> str:
     return {
         ASK_WEBSITE: "onboard",
         ASK_APIS: "setup",
+        ASK_CHANNELS: "choose_channels",
         ASK_SCHEDULE: "set_automation",
         CONFIRM_SCHEDULE: "confirm_schedule",
         CHOOSE_START: "choose_start",
@@ -315,6 +338,10 @@ def next_actions(step: str) -> list[str]:
         ASK_APIS: [
             "Say branding is confirmed for THIS company only.",
             "Collect the three APIs in this chat and call setup.",
+        ],
+        ASK_CHANNELS: [
+            "Show the five channel buttons (multi-select): YouTube, TikTok, Instagram, LinkedIn, X.",
+            "Call choose_channels(platforms=[...]) with what they pick.",
         ],
         ASK_SCHEDULE: [
             "Ask times and how many times per day. Always suggest twice a day.",
@@ -360,6 +387,7 @@ def walkthrough_view(record: dict[str, Any]) -> dict[str, Any]:
             "2": "Ask for the company website.",
             "3": "Confirm branding for that company.",
             "4": "Ask for the three APIs.",
+            "4b": "Ask which channels to post to (YouTube, TikTok, Instagram, LinkedIn, X).",
             "5": "Ask times and how many times per day (suggest twice a day).",
             "6": "Confirm schedule. Automations are set. Times can change later.",
             "7": "Show the three start options.",

@@ -8,7 +8,7 @@ os.environ.setdefault("DATA_DIR", "/tmp/autopilot-mcp-walkthrough-tests")
 
 import pytest
 
-from app.mcp_server import bind_buyer, choose_start, confirm_schedule, onboard, set_automation, setup
+from app.mcp_server import bind_buyer, choose_channels, choose_start, confirm_schedule, onboard, set_automation, setup
 from app.store import ensure_buyer, load_buyer, normalize_hours, parse_clock_hour, reset_instance
 from app.walkthrough import START_BOTH, START_NOW, START_SCHEDULED, hours_for_times_per_day, normalize_start_mode
 
@@ -47,6 +47,9 @@ async def test_eight_step_clean_setup(monkeypatch) -> None:
         postproxy_profile_group_id="grp_test",
     )
     assert step5["ready"] is True
+    assert step5["step_name"] == "ask_channels"
+    assert "YouTube, TikTok, Instagram, LinkedIn, X" in step5["say_to_user"]
+    step5 = await choose_channels(["instagram", "tiktok"])
     assert step5["step_name"] == "ask_schedule"
     assert "twice a day" in step5["say_to_user"].lower()
     assert "Do not post yet" in step5["say_to_user"]

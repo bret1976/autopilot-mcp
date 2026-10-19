@@ -13,7 +13,8 @@ from app import growth_v2
 from app import postproxy
 from app.jobs import is_busy, load_job, spawn_job
 from app.media import MediaError, download_and_cut
-from app.platforms import effective_platforms
+from app.platforms import effective_platforms, normalize_platforms
+from app.config import CHANNEL_CHOICES
 from app.onboard import blocked, fetch_brand_from_website, normalize_website, readiness
 from app.proof import proof_from_last_run
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
@@ -64,6 +65,9 @@ mcp = FastMCP(
         "3) Say branding for THEIR company is now confirmed. "
         "4) Ask for the three APIs in THIS chat: Gemini API key, PostProxy API key, "
         "PostProxy profile group ID. Call setup with those values. Never send them to another window. "
+        "4b) Right after PostProxy is connected, ask which channels to post to "
+        "(YouTube, TikTok, Instagram, LinkedIn, X; multi-select buttons) and call choose_channels. "
+        "Posts only go to the chosen channels. "
         "5) After the three APIs are saved, ask what time of day and how many times per day. "
         "Always suggest twice a day (8:00 AM and 5:00 PM). Then call set_automation with those times. "
         "Do not post yet. "
@@ -575,6 +579,57 @@ def _apply_schedule_inputs(
         fields["require_approval"] = False if enabled is True and require_approval is None else require_approval
     saved = update_setup(record["buyer_id"], fields)
     return update_setup(saved["buyer_id"], {"walkthrough_step": infer_step(saved)})
+
+
+async def _connected_channels(record: dict[str, Any]) -> list[str]:
+    key = str(record.get("postproxy_api_key") or "").strip()
+    if not key:
+        return []
+    try:
+        indexed = postproxy.index_profiles(
+            await postproxy.list_profiles(key, str(record.get("postproxy_profile_group_id") or ""))
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    return [cid for cid, _ in CHANNEL_CHOICES if cid in indexed]
+
+
+@mcp.tool
+async def choose_channels(platforms: list[str] | str | None = None) -> dict[str, Any]:
+    """Step 4b, right after PostProxy is connected: which channels Autopost posts to.
+
+    platforms: any of youtube, tiktok, instagram, linkedin, x. Call with no platforms to
+    list the choices and which ones are connected in this buyer's PostProxy.
+    """
+    record = current_record()
+    connected = await _connected_channels(record)
+    options = [
+        {"id": cid, "label": label, "connected": cid in connected, "multi_select": True}
+        for cid, label in CHANNEL_CHOICES
+    ]
+    if isinstance(platforms, str):
+        platforms = [part for part in platforms.replace(",", " ").split() if part]
+    allowed = {cid for cid, _ in CHANNEL_CHOICES}
+    picked = [p for p in normalize_platforms(platforms or []) if p in allowed]
+    if not picked:
+        payload = _onboard_payload(record)
+        payload["ok"] = False
+        payload["choices"] = options
+        payload["connected_channels"] = connected
+        payload["say_to_user"] = (
+            "Which channels should Autopost post to? Pick one or more: "
+            "YouTube, TikTok, Instagram, LinkedIn, X."
+            + (f" Connected in your PostProxy: {', '.join(l for c, l in CHANNEL_CHOICES if c in connected)}." if connected else "")
+        )
+        return payload
+    saved = update_setup(record["buyer_id"], {"platforms": picked, "channels_chosen": True})
+    saved = update_setup(saved["buyer_id"], {"walkthrough_step": infer_step(saved)})
+    payload = _onboard_payload(saved)
+    payload["ok"] = True
+    payload["channels"] = picked
+    payload["not_connected_yet"] = [p for p in picked if connected and p not in connected]
+    payload["message"] = payload["say_to_user"]
+    return payload
 
 
 @mcp.tool

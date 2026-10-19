@@ -4,6 +4,8 @@ from app.config import (
     IMAGE_PLATFORMS,
     LANDSCAPE_PLATFORMS,
     LEGACY_ONBOARD_PLATFORMS,
+    OWNER_BUYER_ID,
+    OWNER_DEFAULT_EXCLUDED,
     ONBOARD_PLATFORMS,
     VERTICAL_PLATFORMS,
 )
@@ -104,6 +106,8 @@ def effective_platforms(record: dict, connected: set[str] | None = None) -> list
     if not uses_default_platforms(record):
         return normalize_platforms(record.get("platforms") or [])
     base = list(ONBOARD_PLATFORMS)
+    if record.get("buyer_id") == OWNER_BUYER_ID:
+        base = [name for name in base if name not in OWNER_DEFAULT_EXCLUDED]
     if connected:
         live = [name for name in base if name in connected]
         if live:

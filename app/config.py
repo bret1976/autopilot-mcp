@@ -48,6 +48,17 @@ LEGACY_ONBOARD_PLATFORMS = (
     "facebook",
 )
 
+# Channels a buyer can pick in onboarding (right after PostProxy is connected).
+CHANNEL_CHOICES = (
+    ("youtube", "YouTube"),
+    ("tiktok", "TikTok"),
+    ("instagram", "Instagram"),
+    ("linkedin", "LinkedIn"),
+    ("twitter", "X"),
+)
+# Bret's own instance never posts to YouTube unless he picks it himself.
+OWNER_DEFAULT_EXCLUDED = ("youtube",)
+
 DEFAULT_DAILY_HOUR = 8
 DEFAULT_DAILY_TIMEZONE = "America/Los_Angeles"
 

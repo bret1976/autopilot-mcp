@@ -8,7 +8,7 @@ os.environ.setdefault("DATA_DIR", "/tmp/autopilot-mcp-tests")
 
 import pytest
 
-from app.mcp_server import bind_buyer, mcp, onboard, run_autopilot_tool, setup
+from app.mcp_server import bind_buyer, choose_channels, mcp, onboard, run_autopilot_tool, setup
 from app.onboard import brand_from_html, brand_name_from_host, hashtags_from_name, readiness
 from app.store import apply_owner_studio_brand, ensure_buyer, load_buyer, reset_instance, save_buyer
 
@@ -104,6 +104,9 @@ async def test_brand_then_asks_for_three_apis() -> None:
         postproxy_profile_group_id="grp_test",
     )
     assert after_keys["ready"] is True
+    assert after_keys["step_name"] == "ask_channels"
+    assert [c["id"] for c in after_keys["choices"]] == ["youtube", "tiktok", "instagram", "linkedin", "twitter"]
+    after_keys = await choose_channels(["linkedin", "x"])
     assert after_keys["step_name"] == "ask_schedule"
     assert "twice a day" in after_keys["say_to_user"].lower()
     assert "set_automation" in after_keys["say_to_user"]

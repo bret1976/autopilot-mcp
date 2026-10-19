@@ -222,6 +222,7 @@ def reset_instance(buyer_id: str) -> dict[str, Any]:
     record["brand_hashtags"] = []
     record["platforms"] = list(ONBOARD_PLATFORMS)
     record["platforms_set_by_user"] = False
+    record["channels_chosen"] = False
     record["automation_enabled"] = False
     record["require_approval"] = False
     record["daily_run_hours"] = [DEFAULT_DAILY_HOUR]
@@ -332,7 +333,7 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
         if key == "daily_run_days":
             record["daily_run_days"] = [WEEKDAYS[i] for i in normalize_days(value)]
             continue
-        if key in {"automation_enabled", "require_approval", "schedule_set_by_user", "schedule_confirmed"}:
+        if key in {"automation_enabled", "require_approval", "schedule_set_by_user", "schedule_confirmed", "channels_chosen"}:
             fallback = True if key == "require_approval" else False
             record[key] = parse_bool(value, parse_bool(record.get(key), fallback))
             continue

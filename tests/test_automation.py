@@ -207,6 +207,8 @@ async def test_automation_tools_registered() -> None:
 
 def test_ready_copy_asks_schedule_before_any_post() -> None:
     record = _ready("auto-copy")
+    assert readiness(record)["step_name"] == "ask_channels"  # channel choice comes right after the APIs
+    record = update_setup(record["buyer_id"], {"platforms": ["tiktok", "instagram"], "channels_chosen": True})
     report = readiness(record)
     say = report["say_to_user"]
     assert report["step_name"] == "ask_schedule"

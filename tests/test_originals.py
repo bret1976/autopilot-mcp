@@ -120,6 +120,7 @@ def _run(coro):
 
 
 def test_veo_failure_gets_new_topic_and_lite_then_fast(monkeypatch):
+    monkeypatch.setenv("SHORTS_COST_CAP_USD", "5")  # room for the Fast rungs
     topics = iter(["Topic One", "Topic Two", "Topic Three", "Topic Four", "Topic Five", "Topic Six"])
     seen_tried = []
 
@@ -213,3 +214,36 @@ def test_run_autopilot_without_repost_never_scans(monkeypatch):
     assert res["dry_run"] and res["published"] is False
     assert res["origin"] == "original"
     assert res["skipped_sources"][0]["code"] == "originals_failed"
+
+
+def test_8s_formula_cap_never_buys_fast_or_second_billed_clip(monkeypatch):
+    monkeypatch.delenv("SHORTS_COST_CAP_USD", raising=False)
+    topics = iter([f"Topic {n}" for n in range(9)])
+
+    async def plan(record, tried=None, niche=""):
+        return _concept(next(topics))
+
+    engines = []
+
+    async def veo_unbilled(record, prompt, engine, dest):
+        engines.append(engine)
+        raise o.OriginalFailed(f"{engine}: 503 unavailable")
+
+    monkeypatch.setattr(o, "plan_concept", plan)
+    monkeypatch.setattr(o, "generate_veo_clip", veo_unbilled)
+    with pytest.raises(o.OriginalFailed, match="cost cap"):
+        _run(o.produce_original(RECORD))
+    assert engines == ["google_veo_lite"] * 3  # Fast (8s = $0.80) never fits $0.75
+
+    engines.clear()
+
+    async def veo_timeout(record, prompt, engine, dest):
+        engines.append(engine)
+        raise o.OriginalFailed(f"{engine}: timed out after 600s")
+
+    monkeypatch.setattr(o, "generate_veo_clip", veo_timeout)
+    with pytest.raises(o.OriginalFailed, match="cost cap"):
+        _run(o.produce_original(RECORD))
+    assert engines == ["google_veo_lite"]  # a possibly-billed clip uses the budget
+    assert o.clip_cost("google_veo_lite") == 0.40 and o.CLIP_SECONDS == 8
+    assert "Trapped Lightning In Acrylic" in o.CONCEPT_PROMPT

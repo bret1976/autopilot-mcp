@@ -54,6 +54,28 @@ VEO_MODELS = {
 DEFAULT_ENGINE_LADDER = ("google_veo_lite", "google_veo_lite", "google_veo_lite", "google_veo_fast", "google_veo_fast")
 DEFAULT_BACKOFF_SECONDS = (0, 15, 30, 60, 90)
 CLIP_SECONDS = 8
+# 8s formula cost guard (Bret 2026-10-19): hard cap per Short, checked before every Veo call.
+# Gemini API 720p list price per generated second; Veo Fast (8s = $0.80) never fits the default cap.
+VEO_USD_PER_SECOND = {"google_veo_lite": 0.05, "google_veo_fast": 0.10}
+PLAN_USD = 0.03
+CHECK_USD = 0.02
+DEFAULT_COST_CAP_USD = 0.75
+
+
+def cost_cap() -> float:
+    try:
+        return max(0.1, float(os.environ.get("SHORTS_COST_CAP_USD") or DEFAULT_COST_CAP_USD))
+    except ValueError:
+        return DEFAULT_COST_CAP_USD
+
+
+def clip_cost(engine: str) -> float:
+    return round(VEO_USD_PER_SECOND.get(engine, 0.40) * CLIP_SECONDS, 4)
+
+
+def veo_failure_billed(exc: Any) -> bool:
+    low = str(exc).lower()
+    return any(t in low for t in ("timed out", "timeout", "download"))
 VEO_POLL_SECONDS = 10
 VEO_TIMEOUT_SECONDS = 600
 TOPIC_DEDUPE_DAYS = 14
@@ -161,8 +183,10 @@ say this explicitly at the end of veo_prompt.
 Return ONLY JSON with these keys:
   topic: short name
   topic_key: 3-6 lowercase words identifying the subject
-  title_line: the caption's top title, 2-6 words, punchy and show-like (think an episode title), written for THIS
-        video's specific subject and action; no numbering, no "#", no series or brand name, no hashtags or emoji.
+  title_line: the caption's top title, 2-6 words, punchy and show-like, written for THIS video's specific subject
+        and action: a concrete visual title in Title Case naming the object and what visibly happens to it, in the
+        style of "Trapped Lightning In Acrylic", "Frozen Disc Glides On Magnets", "Wire Lowers Metal Block"
+        (style only, never reuse these); no numbering, no "#", no series or brand name, no hashtags or emoji.
         It must be clearly different from every one of these earlier titles: {avoid_titles}
   shot_list: array of exactly 3 beats, each {{"t": "0-1s" | "1-5s" | "5-8s", "shows": concrete visible action}};
         the 0-1s beat names the sound effect, the 5-8s beat ends back near the opening composition.
@@ -617,18 +641,31 @@ async def produce_original(
     tried: list[dict[str, Any]] = []
     errors: list[str] = []
     ladder = engine_ladder()
+    cap, spent, started = cost_cap(), 0.0, 0
     for i, engine in enumerate(ladder):
-        wait = backoff_seconds(i)
-        if i and wait > 0:
+        veo_usd = clip_cost(engine)
+        if spent + PLAN_USD + veo_usd + CHECK_USD > cap + 1e-9:
+            errors.append(f"attempt {i + 1} {engine}: skipped, cost cap ${cap:.2f} (spent ${spent:.2f})")
+            continue
+        wait = backoff_seconds(started)
+        if started and wait > 0:
             await sleep(wait)
+        started += 1
         concept: dict[str, Any] = {}
         try:
+            spent += PLAN_USD
             concept = await plan_concept(record, tried, niche=niche)
             stem = "orig-" + hashlib.sha256(f"{buyer_id}|{concept['topic']}|{time.time()}".encode()).hexdigest()[:10]
             raw = dest / f"{stem}-raw.mp4"
             if i < force_veo_failures:
                 raise OriginalFailed(f"{engine}: forced Veo failure (test)")
-            gen = await generate_veo_clip(record, concept["veo_prompt"], engine, raw)
+            try:
+                gen = await generate_veo_clip(record, concept["veo_prompt"], engine, raw)
+            except Exception as gen_exc:
+                if veo_failure_billed(gen_exc):
+                    spent += veo_usd
+                raise
+            spent += veo_usd + CHECK_USD
             concept, check = await ensure_caption_matches(record, raw, concept, force_mismatch=force_mismatch and i == force_veo_failures)
             sounded, sound = await asyncio.to_thread(ensure_opening_sound, raw)
             rendered = await asyncio.to_thread(render_outputs, sounded, stem, dest, concept["on_screen_hook"])
@@ -646,6 +683,9 @@ async def produce_original(
                 "engine": gen["engine"],
                 "model": gen["model"],
                 "attempt": i + 1,
+                "format": "single_8s",
+                "cost_usd": round(spent, 4),
+                "cost_cap_usd": cap,
                 **{k: v for k, v in rendered.items() if k not in {"vertical", "landscape", "poster", "duration"}},
                 **check,
                 **sound,

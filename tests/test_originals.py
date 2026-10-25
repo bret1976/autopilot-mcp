@@ -38,9 +38,9 @@ def _concept(topic: str, n: int = 0) -> dict:
 def test_defaults_repost_off_and_ladder():
     assert o.originals_enabled()
     assert not o.repost_fallback_enabled()
-    assert o.engine_ladder() == ["google_veo_lite"] * 3 + ["google_veo_fast"] * 2
-    assert o.VEO_MODELS["google_veo_lite"] == "veo-3.1-lite-generate-preview"
-    assert o.VEO_MODELS["google_veo_fast"] == "veo-3.1-fast-generate-preview"
+    assert o.engine_ladder() == ["gemini_omni"] * 3
+    assert o.VEO_MODELS == {"gemini_omni": "gemini-omni-1.1-flash"}
+    assert "veo-3.1" not in open(o.__file__).read().replace("Veo 3.1 Preview", "")
     assert o.VISION_MODEL == "gemini-3.6-flash"
     assert o.CLIP_SECONDS == 8
 
@@ -120,7 +120,9 @@ def _run(coro):
 
 
 def test_veo_failure_gets_new_topic_and_lite_then_fast(monkeypatch):
-    monkeypatch.setenv("SHORTS_COST_CAP_USD", "5")  # room for the Fast rungs
+    monkeypatch.setenv("GROWTH_VIDEO_ENGINES", ",".join(["gemini_omni"] * 5))
+    monkeypatch.setattr(o, "MAX_COST_CAP_USD", 5.0)
+    monkeypatch.setenv("SHORTS_COST_CAP_USD", "5")  # room for 5 rungs (test only)
     topics = iter(["Topic One", "Topic Two", "Topic Three", "Topic Four", "Topic Five", "Topic Six"])
     seen_tried = []
 
@@ -138,7 +140,7 @@ def test_veo_failure_gets_new_topic_and_lite_then_fast(monkeypatch):
     monkeypatch.setattr(o, "generate_veo_clip", veo)
     with pytest.raises(o.OriginalFailed) as err:
         _run(o.produce_original(RECORD))
-    assert engines == ["google_veo_lite"] * 3 + ["google_veo_fast"] * 2
+    assert engines == ["gemini_omni"] * 5
     assert seen_tried[-1] == ["Topic One", "Topic Two", "Topic Three", "Topic Four"]
     assert "All 5" in str(err.value)
 
@@ -166,6 +168,8 @@ def test_rewrite_keeps_number():
 
 @pytest.mark.skipif(not FFMPEG, reason="ffmpeg missing")
 def test_full_original_pipeline_forced_failure_and_mismatch(monkeypatch, tmp_path):
+    monkeypatch.setattr(o, "MAX_COST_CAP_USD", 5.0)
+    monkeypatch.setenv("SHORTS_COST_CAP_USD", "5")  # forced failure needs a 2nd rung (test only)
     topics = iter(["Topic One", "Topic Two", "Topic Three"])
 
     async def plan(record, tried=None, niche=""):
@@ -184,7 +188,7 @@ def test_full_original_pipeline_forced_failure_and_mismatch(monkeypatch, tmp_pat
     monkeypatch.setattr(o, "generate_veo_clip", veo)
     monkeypatch.setattr(o, "vision_json", vision)
     media, concept, info = _run(o.produce_original(RECORD, force_veo_failures=1, force_mismatch=True))
-    assert info["attempt"] == 2 and info["engine"] == "google_veo_lite"
+    assert info["attempt"] == 2 and info["engine"] == "gemini_omni"
     assert info["caption_check"] == "rewritten_from_frames"
     assert info["sfx_added"] is True  # silent opening got the whoosh
     assert info["native_vertical_source"] is True
@@ -233,7 +237,7 @@ def test_8s_formula_cap_never_buys_fast_or_second_billed_clip(monkeypatch):
     monkeypatch.setattr(o, "generate_veo_clip", veo_unbilled)
     with pytest.raises(o.OriginalFailed, match="cost cap"):
         _run(o.produce_original(RECORD))
-    assert engines == ["google_veo_lite"] * 3  # Fast (8s = $0.80) never fits $0.75
+    assert engines == ["gemini_omni"]  # $0.85 cap: one Omni clip reservation ($0.82) per Short
 
     engines.clear()
 
@@ -244,6 +248,54 @@ def test_8s_formula_cap_never_buys_fast_or_second_billed_clip(monkeypatch):
     monkeypatch.setattr(o, "generate_veo_clip", veo_timeout)
     with pytest.raises(o.OriginalFailed, match="cost cap"):
         _run(o.produce_original(RECORD))
-    assert engines == ["google_veo_lite"]  # a possibly-billed clip uses the budget
-    assert o.clip_cost("google_veo_lite") == 0.40 and o.CLIP_SECONDS == 8
+    assert engines == ["gemini_omni"]  # a possibly-billed clip uses the budget
+    assert o.clip_cost("gemini_omni") == 0.82 and o.CLIP_SECONDS == 8
     assert "Trapped Lightning In Acrylic" in o.CONCEPT_PROMPT
+
+
+def test_cost_cap_default_085_and_never_above(monkeypatch):
+    monkeypatch.delenv("SHORTS_COST_CAP_USD", raising=False)
+    assert o.cost_cap() == 0.85
+    monkeypatch.setenv("SHORTS_COST_CAP_USD", "3")
+    assert o.cost_cap() == 0.85
+    assert o.PLAN_USD + o.clip_cost() + o.CHECK_USD <= 0.85
+
+
+def test_omni_request_body_and_cost():
+    body = o.omni_request_body("A glass drop shatters.")
+    assert body["model"] == "gemini-omni-1.1-flash"
+    assert body["response_format"] == {"type": "video", "aspect_ratio": "9:16", "resolution": "720p"}
+    assert body["generation_config"]["max_output_tokens"] == 46800
+    assert "exactly 8 seconds" in body["input"]
+    assert 0.80 < o.omni_expected_cost() < 0.82
+    usage = {"output_tokens_by_modality": [{"modality": "video", "tokens": 46336}], "total_output_tokens": 46336,
+             "total_input_tokens": 100}
+    assert o.omni_cost_from_usage(usage) == round(46336 * 17.5 / 1e6 + 100 * 1.5 / 1e6, 4)
+    assert o.omni_cost_from_usage({}) is None
+
+
+def test_no_server_key_fallback(monkeypatch, tmp_path):
+    monkeypatch.setenv("GEMINI_API_KEY", "server-key-must-not-be-used")
+    rec = {"buyer_id": "t2"}
+    assert o._api_key(rec) == ""
+    with pytest.raises(o.OriginalFailed, match="Add your own Gemini key"):
+        _run(o.generate_veo_clip(rec, "p", "gemini_omni", tmp_path / "x.mp4"))
+
+
+def test_generate_clip_parses_omni_response(monkeypatch, tmp_path):
+    import base64 as b64
+    import httpx
+
+    data = b"\x00" * 20000
+
+    def handler(request):
+        assert request.url.path.endswith("/interactions")
+        return httpx.Response(200, json={"status": "completed", "usage": {"total_output_tokens": 46336},
+                                         "outputs": [{"content": [{"type": "video", "data": b64.b64encode(data).decode()}]}]})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(o.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(o.gemini_budget, "consume", lambda *a, **k: None)
+    out = _run(o.generate_veo_clip(RECORD, "p", "gemini_omni", tmp_path / "x.mp4"))
+    assert out["model"] == "gemini-omni-1.1-flash" and out["actual_cost_usd"] == round(46336 * 17.5 / 1e6, 4)
+    assert (tmp_path / "x.mp4").read_bytes() == data

@@ -4,7 +4,7 @@ Every automated slot now posts a NEW AI-generated original instead of reposting 
 
 * plan a concept with a 3-beat shot list (Gemini), on a topic not used in the last 14 days
   (loose word matching), with a number in the on-screen hook and a comment question;
-* render it with Veo as a native 9:16, 8-second clip. Veo 3.1 Lite for attempts 1-3, Veo 3.1 Fast for 4-5,
+* render it with Gemini Omni 1.1 Flash (720p) as a native 9:16, 8-second clip (Veo 3.1 Preview was shut down 2026-10-22),
   and every failed attempt gets a brand-new concept on a new topic;
 * sample frames and ask Gemini (gemini-3.6-flash) whether the video shows what the caption says.
   On a mismatch, rewrite the caption from the frames and re-check; if it still fails, regenerate.
@@ -18,7 +18,7 @@ GROWTH_V2_REPOST_FALLBACK=1 is set. It is OFF by default.
 Env:
   GROWTH_V2_ORIGINALS=0              turn originals off (legacy scan/transform path)
   GROWTH_V2_REPOST_FALLBACK=1        allow the repost/transform path after all originals fail
-  GROWTH_VIDEO_ENGINES=a,b,...       override the Lite x3 -> Fast x2 ladder
+  GROWTH_VIDEO_ENGINES=a,b,...       override the Omni retry ladder (a second clip only fits the cap after an unbilled failure)
   GROWTH_RETRY_BACKOFF=0,15,30,...   seconds to wait before each attempt
 """
 from __future__ import annotations
@@ -47,30 +47,97 @@ logger = logging.getLogger("growth_v2.originals")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 VISION_MODEL = "gemini-3.6-flash"
 CONCEPT_MODELS = ("gemini-3.6-flash",)
-VEO_MODELS = {
-    "google_veo_lite": "veo-3.1-lite-generate-preview",
-    "google_veo_fast": "veo-3.1-fast-generate-preview",
-}
-DEFAULT_ENGINE_LADDER = ("google_veo_lite", "google_veo_lite", "google_veo_lite", "google_veo_fast", "google_veo_fast")
+# 2026-10-25 (Bret): Veo 3.1 Preview (lite/fast) was shut down by Google 2026-10-22, so every attempt runs on
+# Gemini Omni 1.1 Flash (720p, native 9:16, 8 s), ported from bret1976/marketing-automation (PR #17).
+OMNI_ENGINE = "gemini_omni"
+OMNI_MODEL = "gemini-omni-1.1-flash"
+OMNI_RESOLUTION = "720p"
+OMNI_VIDEO_TOKENS_PER_SECOND = 5792
+OMNI_VIDEO_USD_PER_MTOKEN = 17.50
+OMNI_TEXT_OUT_USD_PER_MTOKEN = 9.00
+OMNI_INPUT_USD_PER_MTOKEN = 1.50
+# Hard cap on billed output tokens per clip: 46,800 x $17.50/1M = $0.819 (+ <$0.001 prompt) worst case.
+OMNI_MAX_OUTPUT_TOKENS = 46800
+OMNI_MAX_CLIP_USD = 0.82
+OMNI_TIMEOUT_SECONDS = 600
+VEO_MODELS = {OMNI_ENGINE: OMNI_MODEL}  # engine -> model (name kept for callers)
+# Retries stay on Omni; under the $0.85 cap a second clip only fits after an unbilled failure.
+DEFAULT_ENGINE_LADDER = (OMNI_ENGINE, OMNI_ENGINE, OMNI_ENGINE)
 DEFAULT_BACKOFF_SECONDS = (0, 15, 30, 60, 90)
 CLIP_SECONDS = 8
-# 8s formula cost guard (Bret 2026-10-19): hard cap per Short, checked before every Veo call.
-# Gemini API 720p list price per generated second; Veo Fast (8s = $0.80) never fits the default cap.
-VEO_USD_PER_SECOND = {"google_veo_lite": 0.05, "google_veo_fast": 0.10}
-PLAN_USD = 0.03
-CHECK_USD = 0.02
-DEFAULT_COST_CAP_USD = 0.75
+# Cost guard: hard cap per Short, checked before every paid video call (worst case reserved).
+PLAN_USD = 0.0125   # concept planning text calls (estimate)
+CHECK_USD = 0.0125  # frame check vision calls (estimate)
+DEFAULT_COST_CAP_USD = 0.85
+MAX_COST_CAP_USD = 0.85
 
 
 def cost_cap() -> float:
+    """SHORTS_COST_CAP_USD env override; default $0.85, never above $0.85."""
     try:
-        return max(0.1, float(os.environ.get("SHORTS_COST_CAP_USD") or DEFAULT_COST_CAP_USD))
+        return min(MAX_COST_CAP_USD, max(0.1, float(os.environ.get("SHORTS_COST_CAP_USD") or DEFAULT_COST_CAP_USD)))
     except ValueError:
         return DEFAULT_COST_CAP_USD
 
 
-def clip_cost(engine: str) -> float:
-    return round(VEO_USD_PER_SECOND.get(engine, 0.40) * CLIP_SECONDS, 4)
+def clip_cost(engine: str = OMNI_ENGINE) -> float:
+    """Worst case one 8 s Omni clip can bill (reserved before the call)."""
+    return OMNI_MAX_CLIP_USD
+
+
+def omni_expected_cost(seconds: float = CLIP_SECONDS) -> float:
+    return round(seconds * OMNI_VIDEO_TOKENS_PER_SECOND * OMNI_VIDEO_USD_PER_MTOKEN / 1_000_000, 4)
+
+
+def omni_cost_from_usage(usage: Any) -> float | None:
+    """Actual cost from Interactions `usage` (None if Google did not return usage)."""
+    if not isinstance(usage, dict) or not usage:
+        return None
+    video_out = text_out = 0
+    for item in usage.get("output_tokens_by_modality") or []:
+        if str(item.get("modality") or "").lower() == "video":
+            video_out += int(item.get("tokens") or 0)
+        else:
+            text_out += int(item.get("tokens") or 0)
+    total_out = int(usage.get("total_output_tokens") or 0)
+    if not video_out and total_out:
+        video_out = total_out
+    elif total_out > video_out + text_out:
+        text_out = total_out - video_out
+    text_out += int(usage.get("total_thought_tokens") or 0)
+    inp = int(usage.get("total_input_tokens") or 0)
+    return round(video_out * OMNI_VIDEO_USD_PER_MTOKEN / 1e6 + text_out * OMNI_TEXT_OUT_USD_PER_MTOKEN / 1e6
+                 + inp * OMNI_INPUT_USD_PER_MTOKEN / 1e6, 4)
+
+
+def omni_prompt(prompt: str, seconds: int = CLIP_SECONDS) -> str:
+    prompt = (prompt or "").strip()
+    if f"exactly {seconds} seconds" in prompt.lower():
+        return prompt
+    return (f"A single continuous {seconds}-second vertical 9:16 cinematic clip, exactly {seconds} seconds long "
+            f"([0-{seconds}s]), with natural synchronized sound. {prompt}").strip()
+
+
+def omni_request_body(prompt: str, seconds: int = CLIP_SECONDS) -> dict[str, Any]:
+    return {
+        "model": OMNI_MODEL,
+        "input": omni_prompt(prompt, seconds),
+        "response_format": {"type": "video", "aspect_ratio": "9:16", "resolution": OMNI_RESOLUTION},
+        "generation_config": {"max_output_tokens": OMNI_MAX_OUTPUT_TOKENS, "thinking_level": "low"},
+        "background": False, "store": False, "stream": False,
+    }
+
+
+def _omni_video_part(body: dict[str, Any]) -> dict[str, Any] | None:
+    for step in body.get("steps") or body.get("outputs") or []:
+        contents = step.get("content") if isinstance(step, dict) else None
+        if isinstance(contents, dict):
+            contents = [contents]
+        for part in contents or []:
+            if isinstance(part, dict) and (part.get("type") == "video" or str(part.get("mime_type", "")).startswith("video/")):
+                return part
+    ov = body.get("output_video")
+    return ov if isinstance(ov, dict) else None
 
 
 def veo_failure_billed(exc: Any) -> bool:
@@ -115,7 +182,8 @@ def backoff_seconds(i: int) -> float:
 
 
 def _api_key(record: dict[str, Any]) -> str:
-    return str(record.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY") or "")
+    """The account's OWN Gemini key only. Never falls back to the server's key (a tester must not bill Bret)."""
+    return str(record.get("gemini_api_key") or "").strip()
 
 
 # ---------------------------------------------------------------- topic dedupe (14 days, loose)
@@ -355,43 +423,47 @@ async def plan_concept(record: dict[str, Any], tried: list[dict[str, Any]] | Non
     raise OriginalFailed(last_error)
 
 
-# ---------------------------------------------------------------- Veo (8s, native 9:16)
+# ---------------------------------------------------------------- Gemini Omni (8s, native 9:16, 720p)
 async def generate_veo_clip(record: dict[str, Any], prompt: str, engine: str, dest: Path) -> dict[str, Any]:
-    """One Veo attempt on exactly `engine` via the Gemini API. No hidden fallback engine."""
+    """One synchronous Gemini Omni interaction. No hidden fallback engine. Returns actual cost from usage."""
     key = _api_key(record)
     if not key:
-        raise OriginalFailed("Gemini API key is not configured (needed for Veo).")
-    model = VEO_MODELS[engine]
+        raise OriginalFailed("No Gemini API key on this account. Add your own Gemini key (setup) to make videos.")
     headers = {"x-goog-api-key": key, "content-type": "application/json"}
     gemini_budget.consume(str(record.get("buyer_id") or "anon"))
-    body = {"instances": [{"prompt": prompt}], "parameters": {"aspectRatio": "9:16"}}
-    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
-        resp = await client.post(f"{GEMINI_BASE}/models/{model}:predictLongRunning", headers=headers, json=body)
-        if resp.status_code >= 400:
+    async with httpx.AsyncClient(timeout=OMNI_TIMEOUT_SECONDS, follow_redirects=True) as client:
+        try:
+            resp = await client.post(f"{GEMINI_BASE}/interactions", headers=headers, json=omni_request_body(prompt))
+        except httpx.TimeoutException as exc:
+            raise OriginalFailed(f"{engine}: timed out after {OMNI_TIMEOUT_SECONDS}s") from exc
+        if resp.status_code != 200:
             raise OriginalFailed(f"{engine}: HTTP {resp.status_code} {resp.text[:300]}")
-        op = resp.json()
-        name = op.get("name") or ""
-        started = time.monotonic()
-        while not op.get("done"):
-            if time.monotonic() - started > VEO_TIMEOUT_SECONDS:
-                raise OriginalFailed(f"{engine}: timed out after {VEO_TIMEOUT_SECONDS}s")
-            await asyncio.sleep(VEO_POLL_SECONDS)
-            poll = await client.get(f"{GEMINI_BASE}/{name}", headers=headers)
-            if poll.status_code >= 400:
-                raise OriginalFailed(f"{engine}: poll HTTP {poll.status_code} {poll.text[:300]}")
-            op = poll.json()
-        if op.get("error"):
-            raise OriginalFailed(f"{engine}: {json.dumps(op['error'])[:300]}")
-        samples = (((op.get("response") or {}).get("generateVideoResponse") or {}).get("generatedSamples") or [])
-        uri = ((samples[0] if samples else {}).get("video") or {}).get("uri") if samples else ""
-        if not uri:
-            reason = json.dumps((op.get("response") or {}).get("generateVideoResponse") or op.get("response") or {})[:300]
-            raise OriginalFailed(f"{engine}: no video returned ({reason})")
-        video = await client.get(uri, headers={"x-goog-api-key": key})
-        if video.status_code >= 400 or len(video.content) < 10_000:
-            raise OriginalFailed(f"{engine}: video download failed HTTP {video.status_code}")
-        dest.write_bytes(video.content)
-    return {"engine": engine, "model": model}
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise OriginalFailed(f"{engine}: unreadable Omni response") from exc
+        usage = body.get("usage") or {}
+        cost = omni_cost_from_usage(usage)
+        if str(body.get("status") or "completed").lower() not in ("completed", "succeeded"):
+            raise OriginalFailed(f"{engine}: Omni status {body.get('status')}")
+        part = _omni_video_part(body)
+        if not part:
+            raise OriginalFailed(f"{engine}: no video returned (download missing)")
+        try:
+            if part.get("data"):
+                content = base64.b64decode(part["data"])
+            else:
+                uri = part.get("uri") or part.get("file_uri") or ""
+                video = await client.get(uri, headers={"x-goog-api-key": key}, timeout=300)
+                if video.status_code != 200:
+                    raise RuntimeError(f"HTTP {video.status_code}")
+                content = video.content
+        except Exception as exc:  # noqa: BLE001
+            raise OriginalFailed(f"{engine}: video download failed {str(exc)[:200]}") from exc
+        if len(content) < 10_000:
+            raise OriginalFailed(f"{engine}: video download failed (empty file)")
+        dest.write_bytes(content)
+    return {"engine": engine, "model": OMNI_MODEL, "usage": usage, "actual_cost_usd": cost}
 
 
 # ---------------------------------------------------------------- ffmpeg helpers
@@ -631,7 +703,7 @@ async def produce_original(
     sleep=asyncio.sleep,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Returns (media, concept, info). Each failed attempt gets a NEW concept on a NEW topic and walks
-    the Lite x3 -> Fast x2 ladder. Raises OriginalFailed only after every attempt failed.
+    the Omni retry ladder (a second clip only fits the cap after an unbilled failure). Raises OriginalFailed only after every attempt failed.
 
     force_veo_failures / force_mismatch are test hooks for production dry-runs only."""
     from app.media import _public_record, buyer_media_dir
@@ -665,7 +737,8 @@ async def produce_original(
                 if veo_failure_billed(gen_exc):
                     spent += veo_usd
                 raise
-            spent += veo_usd + CHECK_USD
+            actual = gen.get("actual_cost_usd")
+            spent += (min(veo_usd, float(actual)) if actual is not None else veo_usd) + CHECK_USD
             concept, check = await ensure_caption_matches(record, raw, concept, force_mismatch=force_mismatch and i == force_veo_failures)
             sounded, sound = await asyncio.to_thread(ensure_opening_sound, raw)
             rendered = await asyncio.to_thread(render_outputs, sounded, stem, dest, concept["on_screen_hook"])

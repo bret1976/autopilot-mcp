@@ -117,6 +117,7 @@ async def initialize_connection(
     profile_group_id: str,
     platform: str,
     redirect_url: str,
+    extra: dict[str, str] | None = None,
 ) -> Any:
     if not profile_group_id:
         raise PostProxyError(
@@ -127,7 +128,7 @@ async def initialize_connection(
         "POST",
         f"/api/profile_groups/{profile_group_id}/initialize_connection",
         api_key,
-        json={"platform": platform, "redirect_url": redirect_url},
+        json={"platform": platform, **({"redirect_url": redirect_url} if redirect_url else {}), **(extra or {})},
     )
 
 
@@ -199,6 +200,8 @@ def connect_instructions(public_base: str) -> dict[str, Any]:
             "Call setup with postproxy_api_key and postproxy_profile_group_id.",
             "Call postproxy_connect for each network you want live.",
             "Open the returned URL and finish OAuth on the buyer's own accounts.",
+            "Bluesky: pass bluesky_handle + bluesky_app_password. Telegram: pass telegram_bot_token.",
+            "Google Business Profile: connect it in the PostProxy dashboard.",
         ],
         "redirect_hint": f"{public_base}/connected",
         "note": "Socials stay on the buyer's PostProxy account. This MCP never hosts those logins.",

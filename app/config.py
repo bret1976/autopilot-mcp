@@ -49,22 +49,18 @@ LEGACY_ONBOARD_PLATFORMS = (
 )
 
 # Channels a buyer can pick in onboarding (right after PostProxy is connected).
-CHANNEL_CHOICES = (
-    ("youtube", "YouTube"),
-    ("tiktok", "TikTok"),
-    ("instagram", "Instagram"),
-    ("linkedin", "LinkedIn"),
-    ("twitter", "X"),
-)
+from app.catalog import PLATFORM_CATALOG as _CATALOG  # noqa: E402
+
+CHANNEL_CHOICES = tuple((pid, rules["label"]) for pid, rules in _CATALOG.items())
 # Bret's own instance never posts to YouTube unless he picks it himself.
 OWNER_DEFAULT_EXCLUDED = ("youtube",)
 
 DEFAULT_DAILY_HOUR = 8
 DEFAULT_DAILY_TIMEZONE = "America/Los_Angeles"
 
-VERTICAL_PLATFORMS = frozenset({"instagram", "tiktok", "youtube", "facebook"})
-LANDSCAPE_PLATFORMS = frozenset({"linkedin", "twitter", "x"})
-IMAGE_PLATFORMS = frozenset({"google_business"})
+VERTICAL_PLATFORMS = frozenset(p for p, r in _CATALOG.items() if r["aspect"] == "9:16")
+LANDSCAPE_PLATFORMS = frozenset({p for p, r in _CATALOG.items() if r["aspect"] == "16:9"} | {"x"})
+IMAGE_PLATFORMS = frozenset(p for p, r in _CATALOG.items() if r["aspect"] == "image")
 
 HASHTAG_CAPS: dict[str, tuple[int, int]] = {
     "linkedin": (5, 8),
@@ -75,6 +71,10 @@ HASHTAG_CAPS: dict[str, tuple[int, int]] = {
     "twitter": (1, 2),
     "x": (1, 2),
     "google_business": (0, 3),
+    "threads": (0, 1),
+    "pinterest": (2, 5),
+    "bluesky": (1, 2),
+    "telegram": (0, 3),
     "gbp": (0, 3),
     "gmb": (0, 3),
 }

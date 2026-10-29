@@ -251,7 +251,7 @@ def say_for_step(record: dict[str, Any], step: str) -> str:
         return (
             "Step 4b — The three APIs are saved and PostProxy is connected.\n\n"
             "Which channels should Autopost post to? Pick any of: "
-            "YouTube, TikTok, Instagram, LinkedIn, X.\n"
+            "YouTube, TikTok, Instagram, LinkedIn, X, Facebook, Threads, Pinterest, Bluesky, Telegram, Google Business Profile.\n"
             "Channels connected in your PostProxy are marked connected.\n\n"
             "Call choose_channels with the channels they pick. Posts only go to those channels. "
             "They can change this later with choose_channels."
@@ -340,7 +340,7 @@ def next_actions(step: str) -> list[str]:
             "Collect the three APIs in this chat and call setup.",
         ],
         ASK_CHANNELS: [
-            "Show the five channel buttons (multi-select): YouTube, TikTok, Instagram, LinkedIn, X.",
+            "Show one button per channel (multi-select, each optional): YouTube, TikTok, Instagram, LinkedIn, X, Facebook, Threads, Pinterest, Bluesky, Telegram, Google Business Profile.",
             "Call choose_channels(platforms=[...]) with what they pick.",
         ],
         ASK_SCHEDULE: [
@@ -387,7 +387,7 @@ def walkthrough_view(record: dict[str, Any]) -> dict[str, Any]:
             "2": "Ask for the company website.",
             "3": "Confirm branding for that company.",
             "4": "Ask for the three APIs.",
-            "4b": "Ask which channels to post to (YouTube, TikTok, Instagram, LinkedIn, X).",
+            "4b": "Ask which channels to post to (any PostProxy channel, each optional).",
             "5": "Ask times and how many times per day (suggest twice a day).",
             "6": "Confirm schedule. Automations are set. Times can change later.",
             "7": "Show the three start options.",

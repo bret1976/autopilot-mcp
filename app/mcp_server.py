@@ -400,8 +400,67 @@ async def postproxy_connect(
         "raw": safe,
         "help": help_info,
         "say_to_user": (f"Open this URL to connect {rules['label']} on YOUR PostProxy account." if url
-                        else f"{rules['label']} is connecting on YOUR PostProxy account."),
+                        else f"{rules['label']} is connecting on YOUR PostProxy account.")
+                       + (" After it connects, call pick_posting_spot to choose where posts go."
+                          if name in PICK_HELP else ""),
     }
+
+
+PICK_HELP = {
+    "pinterest": "Pick the Pinterest board your pins should go to.",
+    "telegram": ("Pick the Telegram channel or group to post to. If yours is missing: add your bot "
+                 "as an admin of that channel or group, post any message there, then ask me to "
+                 "list chats again."),
+}
+
+
+@mcp.tool
+async def pick_posting_spot(platform: str, choice: str | None = None) -> dict[str, Any]:
+    """Pinterest board / Telegram chat picker for the buyer's OWN PostProxy account.
+
+    Call with just platform ("pinterest" or "telegram") to list the boards or chats PostProxy
+    sees, then call again with choice = the id (or exact name) to save it for this buyer.
+    """
+    record = current_record()
+    gate = blocked(record, need="publish")
+    if gate:
+        return gate
+    name = normalize_platform(platform)
+    rules = platform_rules(name) or {}
+    field = rules.get("pin_field")
+    if name not in PICK_HELP or not field:
+        return {"ok": False, "platform": platform,
+                "say_to_user": "Only Pinterest (board) and Telegram (chat) need a posting spot picked."}
+    key = record.get("postproxy_api_key") or ""
+    try:
+        profiles = postproxy.index_profiles(
+            await postproxy.list_profiles(key, record.get("postproxy_profile_group_id") or ""))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "platform": name, "say_to_user": f"Could not reach PostProxy: {str(exc)[:160]}"}
+    profile = profiles.get(name)
+    if not profile:
+        return {"ok": False, "platform": name, "connected": False,
+                "say_to_user": f"{rules['label']} is not connected yet. Call postproxy_connect first."}
+    try:
+        rows = postproxy.as_rows(await postproxy.list_placements(key, str(profile.get("id") or "")))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "platform": name, "say_to_user": f"Could not list spots: {str(exc)[:160]}"}
+    options = [{"id": postproxy.placement_id(r), "name": str(r.get("name") or postproxy.placement_id(r))}
+               for r in rows if postproxy.placement_id(r)]
+    current = record.get(field) or ""
+    if choice:
+        wanted = choice.strip()
+        hit = next((o for o in options if wanted in (o["id"], o["name"])), None)
+        if not hit:
+            return {"ok": False, "platform": name, "options": options, "help": PICK_HELP[name],
+                    "say_to_user": f"I could not find '{wanted}'. Pick one of the listed options."}
+        update_setup(record["buyer_id"], {field: hit["id"]})
+        return {"ok": True, "platform": name, "saved": hit,
+                "say_to_user": f"Saved. {rules['label']} posts will go to {hit['name']}."}
+    return {"ok": True, "platform": name, "options": options, "current": current or None,
+            "help": PICK_HELP[name],
+            "say_to_user": (PICK_HELP[name] if options else
+                            f"No {'chats' if name == 'telegram' else 'boards'} found yet. " + PICK_HELP[name])}
 
 
 @mcp.tool(name="scan_trends")

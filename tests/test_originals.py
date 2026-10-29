@@ -250,7 +250,7 @@ def test_8s_formula_cap_never_buys_fast_or_second_billed_clip(monkeypatch):
         _run(o.produce_original(RECORD))
     assert engines == ["gemini_omni"]  # a possibly-billed clip uses the budget
     assert o.clip_cost("gemini_omni") == 0.82 and o.CLIP_SECONDS == 8
-    assert "Trapped Lightning In Acrylic" in o.CONCEPT_PROMPT
+    assert "Omaha Beach 1944" in o.CONCEPT_PROMPT
 
 
 def test_cost_cap_default_085_and_never_above(monkeypatch):
@@ -265,6 +265,9 @@ def test_omni_request_body_and_cost():
     body = o.omni_request_body("A glass drop shatters.")
     assert body["model"] == "gemini-omni-1.1-flash"
     assert body["response_format"] == {"type": "video", "aspect_ratio": "9:16", "resolution": "720p"}
+    wide = o.omni_request_body("A fleet at dawn.", aspect_ratio="16:9")
+    assert wide["response_format"]["aspect_ratio"] == "16:9" and "widescreen 16:9" in wide["input"]
+    assert "single continuous" not in wide["input"]
     assert body["generation_config"]["max_output_tokens"] == 46800
     assert "exactly 8 seconds" in body["input"]
     assert 0.80 < o.omni_expected_cost() < 0.82
@@ -299,3 +302,14 @@ def test_generate_clip_parses_omni_response(monkeypatch, tmp_path):
     out = _run(o.generate_veo_clip(RECORD, "p", "gemini_omni", tmp_path / "x.mp4"))
     assert out["model"] == "gemini-omni-1.1-flash" and out["actual_cost_usd"] == round(46336 * 17.5 / 1e6, 4)
     assert (tmp_path / "x.mp4").read_bytes() == data
+
+
+def test_cinematic_style_defaults(monkeypatch):
+    monkeypatch.delenv("ORIGINALS_STYLE_ASPECT", raising=False)
+    assert o.style_aspect() == "16:9"
+    monkeypatch.setenv("ORIGINALS_STYLE_ASPECT", "9:16")
+    assert o.style_aspect() == "9:16"
+    assert "CINEMATIC RECREATION" in o.CONCEPT_PROMPT and "LOOP" not in o.CONCEPT_PROMPT
+    tags = o.style_hashtags(["#OmahaBeach", "WWII", "#Extra"])
+    assert tags == ["#OmahaBeach", "#WWII", "#CinematicAI", "#AIFilmmaking", "#AICinema"]
+    assert o.style_hashtags([])[0] == "#History"

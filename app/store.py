@@ -184,6 +184,9 @@ def ensure_buyer(
         "postproxy_profile_group_id": "",
         "facebook_page_id": "",
         "google_location_id": "",
+        "linkedin_organization_id": "",
+        "pinterest_board_id": "",
+        "telegram_chat_id": "",
         "brand_name": "",
         "website_url": "",
         "brand_voice": "",
@@ -216,6 +219,9 @@ def reset_instance(buyer_id: str) -> dict[str, Any]:
     record["postproxy_profile_group_id"] = ""
     record["facebook_page_id"] = ""
     record["google_location_id"] = ""
+    record["linkedin_organization_id"] = ""
+    record["pinterest_board_id"] = ""
+    record["telegram_chat_id"] = ""
     record["brand_name"] = ""
     record["website_url"] = ""
     record["brand_voice"] = ""
@@ -348,6 +354,9 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
             "note",
             "facebook_page_id",
             "google_location_id",
+            "linkedin_organization_id",
+            "pinterest_board_id",
+            "telegram_chat_id",
             "last_automation_date",
             "last_automation_slot",
             "walkthrough_step",
@@ -392,6 +401,9 @@ def public_config(record: dict[str, Any]) -> dict[str, Any]:
         "postproxy_profile_group_id": record.get("postproxy_profile_group_id") or None,
         "facebook_page_id": record.get("facebook_page_id") or None,
         "google_location_id": record.get("google_location_id") or None,
+        "linkedin_organization_id": record.get("linkedin_organization_id") or None,
+        "pinterest_board_id": record.get("pinterest_board_id") or None,
+        "telegram_chat_id": record.get("telegram_chat_id") or None,
         "gemini_key": _mask(record.get("gemini_api_key")),
         "postproxy_key": _mask(record.get("postproxy_api_key")),
         "configured": report["ready"],

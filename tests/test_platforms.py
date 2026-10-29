@@ -3,7 +3,7 @@ from app.config import IMAGE_PLATFORMS, LANDSCAPE_PLATFORMS, VERTICAL_PLATFORMS
 
 
 def test_vertical_and_landscape_sets() -> None:
-    assert VERTICAL_PLATFORMS == frozenset({"instagram", "tiktok", "youtube", "facebook"})
+    assert VERTICAL_PLATFORMS == frozenset({"instagram", "tiktok", "youtube", "facebook", "threads", "pinterest", "bluesky", "telegram"})
     assert LANDSCAPE_PLATFORMS == frozenset({"linkedin", "twitter", "x"})
     assert IMAGE_PLATFORMS == frozenset({"google_business"})
     for name in VERTICAL_PLATFORMS:

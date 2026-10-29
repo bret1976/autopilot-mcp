@@ -562,6 +562,8 @@ async def publish_cut(
 
 TIKTOK_CAPTION_MAX = 2200
 
+from app.catalog import clamp_caption, platform_rules  # noqa: E402
+
 
 async def _publish_one(
     record: dict[str, Any],
@@ -587,9 +589,28 @@ async def _publish_one(
     if not body and name == "tiktok":
         # Copy written before TikTok was targeted: reuse the other vertical caption.
         body = captions.get("instagram") or captions.get("youtube") or ""
+    if not body and name in ("threads", "bluesky", "pinterest", "telegram"):
+        body = captions.get("twitter") or captions.get("instagram") or captions.get("linkedin") or ""
+    if not body and name == "facebook":
+        body = captions.get("linkedin") or captions.get("instagram") or ""
     body = body or copy.get("title") or ""
     if name == "tiktok":
         body = body[:TIKTOK_CAPTION_MAX]
+    body = clamp_caption(name, body)
+    if name in ("pinterest", "telegram") and not params.get(platform_rules(name)["placement_param"]):
+        rules = platform_rules(name)
+        return {
+            "ok": False,
+            "aspect": aspect,
+            "platform": name,
+            "account": account,
+            "placement": None,
+            "error": f"{rules['placement_param']} missing",
+            "say_to_user": (
+                f"{rules['label']} needs a {rules['placement_param'].replace('_', ' ')} to post. "
+                f"Pick one in PostProxy or save it with setup({rules['pin_field']}=...)."
+            ),
+        }
 
     async def send(media_list: list[str]) -> Any:
         return await postproxy.create_post(
@@ -703,6 +724,17 @@ async def _platform_params(
             params["cta_action_type"] = "LEARN_MORE"
             params["cta_url"] = website
         return params, location_id or None, "google_location_id"
+    rules = platform_rules(name)
+    param = rules.get("placement_param")
+    if param:
+        pin_field = rules["pin_field"]
+        pinned = str(record.get(pin_field) or "")
+        if name == "linkedin" and not pinned:
+            # No organization saved: post as the personal profile (what works today).
+            return {}, None, None
+        picked = await _resolve_placement(api_key, profile, pinned=pinned, prefer_name=str(profile.get("name") or ""))
+        value = postproxy.placement_id(picked) if picked else ""
+        return ({param: value} if value else {}), value or None, pin_field
     return {}, None, None
 
 

@@ -35,10 +35,10 @@ async def test_channels_asked_right_after_postproxy_and_saved(monkeypatch) -> No
     monkeypatch.setattr(postproxy, "list_profiles", fake_profiles)
     ask = await choose_channels()
     assert ask["ok"] is False
-    assert [c["id"] for c in ask["choices"]] == ["youtube", "tiktok", "instagram", "linkedin", "twitter"]
+    assert [c["id"] for c in ask["choices"]] [:5] == ["youtube", "tiktok", "instagram", "linkedin", "twitter"]
     assert {c["id"] for c in ask["choices"] if c["connected"]} == {"youtube", "tiktok", "instagram"}
 
-    done = await choose_channels(["TikTok", "x", "youtube shorts", "facebook"])
+    done = await choose_channels(["TikTok", "x", "youtube shorts", "myspace"])
     assert done["ok"] and done["channels"] == ["tiktok", "twitter", "youtube"]
     saved = load_buyer(buyer)
     assert saved["channels_chosen"] is True

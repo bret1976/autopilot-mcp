@@ -13,8 +13,9 @@ from app import growth_v2
 from app import postproxy
 from app.jobs import is_busy, load_job, spawn_job
 from app.media import MediaError, download_and_cut
-from app.platforms import effective_platforms, normalize_platforms
+from app.platforms import effective_platforms, normalize_platform, normalize_platforms
 from app.config import CHANNEL_CHOICES
+from app.catalog import PLATFORM_ORDER, label, platform_rules
 from app.onboard import blocked, fetch_brand_from_website, normalize_website, readiness
 from app.proof import proof_from_last_run
 from app.spine import publish_cut, run_autopilot, scan_trends, write_copy
@@ -66,7 +67,7 @@ mcp = FastMCP(
         "4) Ask for the three APIs in THIS chat: Gemini API key, PostProxy API key, "
         "PostProxy profile group ID. Call setup with those values. Never send them to another window. "
         "4b) Right after PostProxy is connected, ask which channels to post to "
-        "(YouTube, TikTok, Instagram, LinkedIn, X; multi-select buttons) and call choose_channels. "
+        "(any PostProxy channel: YouTube, TikTok, Instagram, LinkedIn, X, Facebook, Threads, Pinterest, Bluesky, Telegram, Google Business Profile; each optional; multi-select buttons) and call choose_channels. "
         "Posts only go to the chosen channels. "
         "5) After the three APIs are saved, ask what time of day and how many times per day. "
         "Always suggest twice a day (8:00 AM and 5:00 PM). Then call set_automation with those times. "
@@ -183,12 +184,16 @@ async def setup(
     public_base_url: str | None = None,
     facebook_page_id: str | None = None,
     google_location_id: str | None = None,
+    linkedin_organization_id: str | None = None,
+    pinterest_board_id: str | None = None,
+    telegram_chat_id: str | None = None,
     reset_api_keys: bool = False,
 ) -> dict[str, Any]:
     """Save the buyer's own keys and brand. Secrets are never echoed back.
 
     If website_url is set, TrendPilot pulls brand voice from that site.
-    facebook_page_id and google_location_id pin PostProxy placements.
+    facebook_page_id, google_location_id, linkedin_organization_id (optional: blank posts
+    as the personal profile), pinterest_board_id and telegram_chat_id pin PostProxy placements.
     automation_enabled / require_approval are optional; prefer set_automation.
     reset_api_keys clears Gemini and PostProxy so onboard asks for the three APIs again.
     """
@@ -216,6 +221,9 @@ async def setup(
         "public_base_url": public_base_url,
         "facebook_page_id": facebook_page_id,
         "google_location_id": google_location_id,
+        "linkedin_organization_id": linkedin_organization_id,
+        "pinterest_board_id": pinterest_board_id,
+        "telegram_chat_id": telegram_chat_id,
     }
     saved = update_setup(record["buyer_id"], fields)
     extra: dict[str, Any] = {}
@@ -259,6 +267,9 @@ async def configure(
     public_base_url: str | None = None,
     facebook_page_id: str | None = None,
     google_location_id: str | None = None,
+    linkedin_organization_id: str | None = None,
+    pinterest_board_id: str | None = None,
+    telegram_chat_id: str | None = None,
 ) -> dict[str, Any]:
     """Alias of setup."""
     return await setup(
@@ -277,6 +288,9 @@ async def configure(
         public_base_url=public_base_url,
         facebook_page_id=facebook_page_id,
         google_location_id=google_location_id,
+        linkedin_organization_id=linkedin_organization_id,
+        pinterest_board_id=pinterest_board_id,
+        telegram_chat_id=telegram_chat_id,
     )
 
 
@@ -328,27 +342,65 @@ async def postproxy_connect(
     platform: str,
     redirect_url: str | None = None,
     profile_group_id: str | None = None,
+    bluesky_handle: str | None = None,
+    bluesky_app_password: str | None = None,
+    telegram_bot_token: str | None = None,
 ) -> dict[str, Any]:
-    """Return the PostProxy OAuth URL so the buyer can connect a social on THEIR account."""
+    """Connect a social on the buyer's OWN PostProxy account. Every platform is optional.
+
+    OAuth platforms (YouTube, TikTok, Instagram, LinkedIn, X, Facebook, Threads, Pinterest)
+    return a URL to open. Bluesky needs bluesky_handle + bluesky_app_password (an app
+    password, not the account password). Telegram needs telegram_bot_token from @BotFather.
+    Google Business Profile is connected in the PostProxy dashboard. Secrets are never echoed.
+    """
     record = current_record()
     gate = blocked(record, need="publish")
     if gate:
         return gate
+    name = normalize_platform(platform)
+    rules = platform_rules(name)
+    if not rules:
+        return {"ok": False, "platform": platform, "supported": list(PLATFORM_ORDER),
+                "say_to_user": f"PostProxy does not support {platform}. Pick one of: "
+                + ", ".join(label(p) for p in PLATFORM_ORDER) + "."}
     group = profile_group_id or record.get("postproxy_profile_group_id") or ""
     redirect = redirect_url or f"{record.get('public_base_url') or public_base_url()}/connected"
+    help_info = postproxy.connect_instructions(redirect.rsplit("/", 1)[0])
+    if rules["connect"] == "dashboard":
+        return {"ok": True, "platform": name, "open_this_url": "https://app.postproxy.dev",
+                "help": help_info,
+                "say_to_user": f"Connect {rules['label']} in your PostProxy dashboard (app.postproxy.dev), "
+                "then call choose_channels again."}
+    extra: dict[str, str] = {}
+    if rules["connect"] == "app_password":
+        if not (bluesky_handle and bluesky_app_password):
+            return {"ok": False, "platform": name, "needs": ["bluesky_handle", "bluesky_app_password"],
+                    "say_to_user": "For Bluesky, paste your handle and an app password "
+                    "(make one at https://bsky.app/settings/app-passwords)."}
+        extra = {"identifier": bluesky_handle.strip(), "app_password": bluesky_app_password.strip()}
+    elif rules["connect"] == "bot_token":
+        if not telegram_bot_token:
+            return {"ok": False, "platform": name, "needs": ["telegram_bot_token"],
+                    "say_to_user": "For Telegram, paste your bot token from @BotFather, and add the bot "
+                    "as an admin of the channel you want to post to."}
+        extra = {"bot_token": telegram_bot_token.strip()}
     data = await postproxy.initialize_connection(
         record.get("postproxy_api_key") or "",
         group,
-        platform,
-        redirect,
+        name,
+        "" if extra else redirect,
+        extra=extra or None,
     )
+    url = data.get("url") if isinstance(data, dict) else None
+    safe = {k: v for k, v in data.items() if k not in ("app_password", "bot_token", "identifier")} if isinstance(data, dict) else data
     return {
         "ok": True,
-        "platform": platform,
-        "open_this_url": data.get("url") if isinstance(data, dict) else None,
-        "raw": data,
-        "help": postproxy.connect_instructions(redirect.rsplit("/", 1)[0]),
-        "say_to_user": f"Open this URL to connect {platform} on YOUR PostProxy account.",
+        "platform": name,
+        "open_this_url": url,
+        "raw": safe,
+        "help": help_info,
+        "say_to_user": (f"Open this URL to connect {rules['label']} on YOUR PostProxy account." if url
+                        else f"{rules['label']} is connecting on YOUR PostProxy account."),
     }
 
 
@@ -591,21 +643,40 @@ async def _connected_channels(record: dict[str, Any]) -> list[str]:
         )
     except Exception:  # noqa: BLE001
         return []
-    return [cid for cid, _ in CHANNEL_CHOICES if cid in indexed]
+    known = [cid for cid, _ in CHANNEL_CHOICES if cid in indexed]
+    # Anything new PostProxy adds later still shows up, read live from the account.
+    extra = [normalize_platform(p) for p in indexed if normalize_platform(p) not in known]
+    return known + [p for p in extra if p]
+
+
+def _channel_notes(cid: str) -> dict[str, Any]:
+    rules = platform_rules(cid)
+    notes: dict[str, Any] = {"caption_max": rules.get("caption_max"), "format": rules.get("aspect"),
+                             "connect": rules.get("connect")}
+    if rules.get("placement_param"):
+        notes["needs"] = rules["placement_param"]
+        notes["needs_required"] = bool(rules.get("placement_required"))
+    return notes
 
 
 @mcp.tool
 async def choose_channels(platforms: list[str] | str | None = None) -> dict[str, Any]:
     """Step 4b, right after PostProxy is connected: which channels Autopost posts to.
 
-    platforms: any of youtube, tiktok, instagram, linkedin, x. Call with no platforms to
+    platforms: any PostProxy channel, each optional: youtube, tiktok, instagram, linkedin, x,
+    facebook, threads, pinterest, bluesky, telegram, google_business. Call with no platforms to
     list the choices and which ones are connected in this buyer's PostProxy.
     """
     record = current_record()
     connected = await _connected_channels(record)
     options = [
-        {"id": cid, "label": label, "connected": cid in connected, "multi_select": True}
-        for cid, label in CHANNEL_CHOICES
+        {"id": cid, "label": name, "connected": cid in connected, "multi_select": True,
+         **_channel_notes(cid)}
+        for cid, name in CHANNEL_CHOICES
+    ] + [
+        {"id": cid, "label": cid.replace("_", " ").title(), "connected": True, "multi_select": True,
+         "supported_for_autopost": False}
+        for cid in connected if cid not in {c for c, _ in CHANNEL_CHOICES}
     ]
     if isinstance(platforms, str):
         platforms = [part for part in platforms.replace(",", " ").split() if part]
@@ -618,8 +689,8 @@ async def choose_channels(platforms: list[str] | str | None = None) -> dict[str,
         payload["connected_channels"] = connected
         payload["say_to_user"] = (
             "Which channels should Autopost post to? Pick one or more: "
-            "YouTube, TikTok, Instagram, LinkedIn, X."
-            + (f" Connected in your PostProxy: {', '.join(l for c, l in CHANNEL_CHOICES if c in connected)}." if connected else "")
+            + ", ".join(n for _, n in CHANNEL_CHOICES) + "."
+            + (f" Connected in your PostProxy: {', '.join(label(c) for c in connected)}." if connected else "")
         )
         return payload
     saved = update_setup(record["buyer_id"], {"platforms": picked, "channels_chosen": True})

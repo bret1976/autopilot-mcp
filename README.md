@@ -212,12 +212,17 @@ Ported from bret1976/marketing-automation PR #24 (`VIDEO_ENGINE=footage`).
 
 - **Turn it on per buyer:** call `setup(originals_engine="footage")`, or set `ORIGINALS_ENGINE=footage` to make it the default for buyers who haven't chosen. A buyer's own choice always beats the env default.
 - **Producing a video (`run_autopilot` / scheduled slots):**
-  1. Pick today's viral topic with the keyless last-24h finder (`app/open_viral.py`; it uses the YouTube Data API when `YOUTUBE_API_KEY` is set, otherwise yt-dlp), ranked by views per hour.
-  2. Match it to the fact-checked template library (`app/footage_topics.py`).
-  3. Pull real public-domain or CC footage from NASA, Wikimedia Commons, or the curated Internet Archive collections.
+  1. **The viral scan picks the subject.** The keyless last-24h finder (`app/open_viral.py`) uses the YouTube Data API when `YOUTUBE_API_KEY` is set, otherwise yt-dlp. It searches a broad query set (`BROAD_VIRAL_QUERIES`), ranks uploads by views per hour, and works down that list.
+     - It skips gaming, music, live streams, film/TV, news, politics, living people, brands, places and abstract concepts.
+     - Each remaining title is resolved to the real-world subject it names via Wikipedia.
+     - The video is **our own original** about that subject. The viral video itself is never downloaded or recut; only its title and view count are read.
+  2. **The script.** It's the fact-checked library script (`app/footage_topics.py`) when the subject is one of those 12 topics. Otherwise it's a tightened, whole-sentence script built from the subject's Wikipedia article (credited CC BY-SA 4.0 in the caption, no LLM). Hashtags and the comment question match the subject's kind: wildlife, space, history, nature and so on.
+  3. **The footage.** Real public-domain or CC footage comes from NASA, Wikimedia Commons (the subject's Wikidata Commons category when it has one), or the curated Internet Archive collections. At most 2 shots come from one source clip.
+     - A subject that can't fill 31 s is skipped for the next viral subject.
+     - There is **no fallback to a canned library topic**. If nothing qualifies, nothing is posted.
   4. Beat-cut it to CC0 music, add a local Kokoro voiceover and captions, and render a 31–55 second clip (target ~45 s) in 9:16 (full-bleed pan-and-scan) and 16:9. Both files are checked with ffprobe; if there isn't enough on-topic footage for 31 s the run fails instead of shipping a short clip, and the voiceover is never sped up. The length never follows the 8-second Gemini/Omni clip setting.
   5. Cost is $0 and nothing calls Gemini.
-- **Tools:** `scan_trends` returns the open-finder results plus the matched topic. `write_copy` returns template copy.
+- **Tools:** `scan_trends` returns the open-finder results plus the viral subject it picked. It returns an empty `title` when nothing qualifies, and never a canned topic. `write_copy` returns template copy.
 - **Publishing:** the 16:9 file goes to LinkedIn and X, and the 9:16 file goes everywhere else. `media_source` is `archival_footage`, so no AI-generated flags are set.
 - **Readiness:** footage buyers only need PostProxy; `readiness()` doesn't ask them for a Gemini key.
 - **Kokoro model:** baked into the image at `/opt/kokoro`, with a build-time synthesis check.

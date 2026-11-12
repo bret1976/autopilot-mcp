@@ -202,6 +202,63 @@ def order_candidates(candidates: list[dict[str, Any]], *, avoid_youtube: bool = 
     return sorted(kept, key=lambda c: source_priority(str(c.get("source_url") or "")))
 
 
+def _footage_topic_for(scan: dict[str, Any]) -> dict[str, Any] | None:
+    """Map a scan (or a write_copy title) back to a footage template topic."""
+    from app import footage_mode, footage_topics
+
+    key = str(scan.get("footage_topic_key") or "").strip()
+    if key in footage_topics.BY_KEY:
+        return footage_topics.BY_KEY[key]
+    title = str(scan.get("title") or "").strip()
+    for t in footage_topics.TOPICS:
+        if title and title.lower() in {t["key"].lower(), t["topic"].lower(), str(t.get("title_line") or "").lower()}:
+            return t
+    ranked = footage_mode.score_topics([{"title": f"{title} {scan.get('why') or ''} {scan.get('notes') or ''}",
+                                         "views_per_hour": 1}])
+    return ranked[0]["topic"] if ranked and ranked[0]["score"] > 0 else None
+
+
+async def scan_trends_footage(record: dict[str, Any], niche: str = "") -> dict[str, Any]:
+    """Footage engine: keyless last-24h finder (YouTube Data API when YOUTUBE_API_KEY is set, else yt-dlp),
+    ranked by views/hour and matched to the fact-checked footage topic library. No Gemini call."""
+    from app import footage_mode
+
+    queries = None
+    if niche.strip():
+        queries = [niche.strip()] + [q for q in (os.environ.get("FOOTAGE_VIRAL_QUERIES") or
+                                                 "ww2 footage|history documentary|nasa|rocket launch|titanic|volcano eruption|engineering").split("|") if q.strip()]
+    viral = await asyncio.to_thread(footage_mode.todays_viral, queries)
+    items = viral.get("top") or []
+    buyer_id = str(record.get("buyer_id") or "")
+    recent = originals.recent_topics(buyer_id) if buyer_id else []
+    pick = footage_mode.pick_topic(items, avoid_keys=originals._footage_avoid_keys(recent), recent_topics=recent)
+    topic = pick["topic"]
+    ranked = footage_mode.score_topics(items)
+    return {
+        "title": topic["topic"],
+        "source_url": "",
+        "platform": "footage",
+        "why": (f"Matches {len(pick.get('matched') or [])} of today's top uploads (viral score {pick.get('score')})."
+                if pick.get("score") else "No library topic matched today's uploads; next unused topic."),
+        "topic_tags": [t.lstrip("#") for t in topic.get("hashtags", [])],
+        "suggested_start": 0,
+        "suggested_duration": 8,
+        "notes": "Real public-domain / CC archival footage. run_autopilot renders 9:16 + 16:9 with no generation API.",
+        "footage_topic_key": topic["key"],
+        "engine": "footage",
+        "gemini_calls": 0,
+        "viral_source": viral.get("source"),
+        "viral_sources": viral.get("sources"),
+        "viral_window_hours": viral.get("window_hours"),
+        "viral_top": [{k: it.get(k) for k in ("title", "url", "views", "views_per_hour", "age_hours", "channel")}
+                      for it in items[:10]],
+        "matched": pick.get("matched", [])[:5],
+        "ranked_topics": [{"key": r["topic"]["key"], "score": r["score"]} for r in ranked[:8]],
+        "errors": (viral.get("errors") or [])[:5],
+        "candidates": [],
+    }
+
+
 async def scan_trends(
     record: dict[str, Any],
     niche: str = "",
@@ -222,6 +279,8 @@ async def scan_trends(
             "notes": "Keep the lamp flare. Lose the talking-head open.",
             "mocked": True,
         }
+    if originals.footage_enabled(record):
+        return await scan_trends_footage(record, niche=niche)
     voice = record.get("brand_voice") or DEFAULT_BRAND_VOICE
     brand = record.get("brand_name") or "the buyer's brand"
     website = record.get("website_url") or ""
@@ -293,7 +352,24 @@ async def scan_trends(
     return result
 
 
+def write_copy_footage(record: dict[str, Any], scan: dict[str, Any]) -> dict[str, Any]:
+    """Footage engine: template copy from the fact-checked topic library. No Gemini call."""
+    from app import footage_mode
+
+    topic = _footage_topic_for(scan)
+    if topic is None:
+        raise ValueError("No footage topic matches this title. Call scan_trends first and pass its title.")
+    concept = footage_mode.build_concept(topic, [], {"score": None, "reason": "write_copy"})
+    platforms = [normalize_platform(str(p)) for p in effective_platforms(record)]
+    copy = originals.copy_for_original(record, concept, platforms)
+    copy["footage_topic_key"] = topic["key"]
+    copy["gemini_calls"] = 0
+    return copy
+
+
 async def write_copy(record: dict[str, Any], scan: dict[str, Any], mock: bool = False) -> dict[str, Any]:
+    if originals.footage_enabled(record) and not mock:
+        return write_copy_footage(record, scan)
     if growth_v2.enabled() and not mock:
         return await write_copy_v2(record, scan)
     platforms = effective_platforms(record)

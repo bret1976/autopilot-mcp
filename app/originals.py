@@ -721,6 +721,69 @@ async def ensure_caption_matches(record: dict[str, Any], raw: Path, concept: dic
                    "mismatches_fixed": first.get("mismatches")}
 
 
+# ---------------------------------------------------------------- footage engine (no generation API)
+
+def footage_enabled(record: dict[str, Any] | None = None) -> bool:
+    """ORIGINALS_ENGINE=footage (env default) or record["originals_engine"]="footage" (per buyer)."""
+    from app.config import footage_engine
+
+    return footage_engine(record)
+
+
+def _footage_avoid_keys(recent: list[str]) -> set[str]:
+    from app import footage_topics
+
+    avoid = {t["key"] for t in footage_topics.TOPICS if any(topics_similar(t["topic"], r) for r in recent)}
+    return set() if len(avoid) >= len(footage_topics.TOPICS) else avoid
+
+
+async def produce_footage_original(record: dict[str, Any], *, niche: str = "") -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Today's viral topic -> template script -> real public-domain / CC footage -> beat-cut edit, local Kokoro
+    voice, captions. Writes a 9:16 and a 16:9 file. Makes no Gemini (or any paid) call and needs no buyer key."""
+    from app import footage_mode
+    from app.media import _poster_frame, _public_record, buyer_media_dir
+
+    buyer_id = str(record["buyer_id"])
+    dest = buyer_media_dir(buyer_id)
+    recent = recent_topics(buyer_id)
+    stem = "foot" + hashlib.sha256(f"{buyer_id}|{time.time()}".encode()).hexdigest()[:10]
+    try:
+        vertical, landscape, concept, info = await asyncio.to_thread(
+            footage_mode.produce_footage, str(dest), avoid_keys=_footage_avoid_keys(recent),
+            recent_topics=recent, name=stem)
+    except Exception as exc:  # noqa: BLE001
+        raise OriginalFailed(f"footage: {exc}"[:1500]) from exc
+    poster = dest / f"{stem}-poster.jpg"
+    try:
+        await asyncio.to_thread(_poster_frame, _bin("ffmpeg"), Path(landscape), poster)
+    except Exception as exc:  # noqa: BLE001 — a poster is optional
+        logger.warning("footage poster failed: %s", exc)
+    meta = {
+        "source_url": "",
+        "mock": False,
+        "duration": (info.get("vertical") or {}).get("duration"),
+        "start": 0.0,
+        "vertical": Path(vertical).name,
+        "landscape": Path(landscape).name,
+        **({"poster": poster.name} if poster.exists() else {}),
+        "media_source": "archival_footage",
+        "origin": "original",
+        "engine": "footage",
+        "model": None,
+        "attempt": 1,
+        "format": "single_8s",
+        "cost_usd": 0.0,
+        "cost_cap_usd": 0.0,
+        "gemini_calls": 0,
+        "niche_requested": niche or None,
+        **{k: info.get(k) for k in ("footage_mode", "topic_key", "viral_match", "footage_sources", "music",
+                                    "voiceover", "captions", "cuts_s", "render_seconds")},
+        "probe": {"vertical": info.get("vertical"), "landscape": info.get("landscape")},
+    }
+    (dest / f"{stem}.json").write_text(json.dumps(meta, indent=2, default=str), encoding="utf-8")
+    return _public_record(buyer_id, meta), concept, meta
+
+
 # ---------------------------------------------------------------- the retry ladder
 
 async def produce_original(
@@ -737,6 +800,8 @@ async def produce_original(
     force_veo_failures / force_mismatch are test hooks for production dry-runs only."""
     from app.media import _public_record, buyer_media_dir
 
+    if footage_enabled(record):
+        return await produce_footage_original(record, niche=niche)
     buyer_id = str(record["buyer_id"])
     dest = buyer_media_dir(buyer_id)
     tried: list[dict[str, Any]] = []
@@ -828,5 +893,9 @@ def copy_for_original(record: dict[str, Any], concept: dict[str, Any], platforms
         "caption_rewritten_from_frames": bool(concept.get("caption_rewritten_from_frames")),
         "original_caption": concept.get("original_caption"),
     }
+    if concept.get("concept_source") == "footage_template":
+        copy["media_source"] = "archival_footage"
+        copy["footage_credit"] = concept.get("footage_credit") or ""
+        copy["concept_source"] = "footage_template"
     copy["youtube_title"] = growth_v2.youtube_title_for(copy, brand)
     return copy

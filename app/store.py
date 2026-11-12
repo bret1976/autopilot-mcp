@@ -311,6 +311,11 @@ def update_setup(buyer_id: str, fields: dict[str, Any]) -> dict[str, Any]:
             if text:
                 record[key] = text
             continue
+        if key == "originals_engine":
+            engine = str(value).strip().lower()
+            if engine in {"gemini", "footage"}:
+                record[key] = engine
+            continue
         if key == "platforms":
             record[key] = normalize_platforms(value if isinstance(value, list) else [value])
             record["platforms_set_by_user"] = bool(record[key])
@@ -372,6 +377,12 @@ def set_last_run(buyer_id: str, last_run: dict[str, Any]) -> dict[str, Any]:
     return save_buyer(record)
 
 
+def _originals_engine(record: dict[str, Any]) -> str:
+    from app.config import originals_engine
+
+    return originals_engine(record)
+
+
 def public_config(record: dict[str, Any]) -> dict[str, Any]:
     from app.onboard import readiness
 
@@ -384,6 +395,7 @@ def public_config(record: dict[str, Any]) -> dict[str, Any]:
         "brand_voice": record.get("brand_voice") or None,
         "brand_hashtags": record.get("brand_hashtags") or [],
         "platforms": effective_platforms(record),
+        "originals_engine": _originals_engine(record),
         "daily_run_hour": hours_from_record(record)[0],
         "daily_run_hours": hours_from_record(record),
         "daily_run_days": [WEEKDAYS[i] for i in days_from_record(record)],

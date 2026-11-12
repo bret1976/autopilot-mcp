@@ -193,3 +193,27 @@ def payment_mode() -> str:
     if stripe_configured():
         return "stripe_checkout_then_mint"
     return "admin_mint_only"
+
+
+# ---------------------------------------------------------------- originals engine (per buyer)
+# "footage" = real public-domain / CC archival footage, template copy, local Kokoro voice: no Gemini key, $0.
+# "gemini"  = Gemini Omni originals (needs the buyer's own Gemini key). Per-buyer record wins over the env default.
+ORIGINALS_ENGINES = ("gemini", "footage")
+
+
+def originals_engine(record: dict | None = None) -> str:
+    raw = str((record or {}).get("originals_engine") or "").strip().lower()
+    if raw not in ORIGINALS_ENGINES:
+        raw = str(os.environ.get("ORIGINALS_ENGINE") or "").strip().lower()
+    return "footage" if raw == "footage" else "gemini"
+
+
+def footage_engine(record: dict | None = None) -> bool:
+    return originals_engine(record) == "footage"
+
+
+def required_api_keys(record: dict | None = None) -> tuple[str, ...]:
+    """Footage-mode buyers never need a Gemini key."""
+    if footage_engine(record):
+        return ("postproxy_api_key", "postproxy_profile_group_id")
+    return ("gemini_api_key", "postproxy_api_key", "postproxy_profile_group_id")

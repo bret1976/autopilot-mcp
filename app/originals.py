@@ -771,7 +771,7 @@ async def produce_footage_original(record: dict[str, Any], *, niche: str = "") -
         "engine": "footage",
         "model": None,
         "attempt": 1,
-        "format": "single_8s",
+        "format": "footage_short",  # 31-55 s (footage_mode.MIN_SECONDS..MAX_SECONDS), not the 8 s Omni clip
         "cost_usd": 0.0,
         "cost_cap_usd": 0.0,
         "gemini_calls": 0,

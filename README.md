@@ -215,7 +215,7 @@ Ported from bret1976/marketing-automation PR #24 (`VIDEO_ENGINE=footage`).
   1. Pick today's viral topic with the keyless last-24h finder (`app/open_viral.py`; it uses the YouTube Data API when `YOUTUBE_API_KEY` is set, otherwise yt-dlp), ranked by views per hour.
   2. Match it to the fact-checked template library (`app/footage_topics.py`).
   3. Pull real public-domain or CC footage from NASA, Wikimedia Commons, or the curated Internet Archive collections.
-  4. Beat-cut it to CC0 music, add a local Kokoro voiceover and captions, and render an 8-second clip in 9:16 (full-bleed pan-and-scan) and 16:9.
+  4. Beat-cut it to CC0 music, add a local Kokoro voiceover and captions, and render a 31–55 second clip (target ~45 s) in 9:16 (full-bleed pan-and-scan) and 16:9. Both files are checked with ffprobe; if there isn't enough on-topic footage for 31 s the run fails instead of shipping a short clip, and the voiceover is never sped up. The length never follows the 8-second Gemini/Omni clip setting.
   5. Cost is $0 and nothing calls Gemini.
 - **Tools:** `scan_trends` returns the open-finder results plus the matched topic. `write_copy` returns template copy.
 - **Publishing:** the 16:9 file goes to LinkedIn and X, and the 9:16 file goes everywhere else. `media_source` is `archival_footage`, so no AI-generated flags are set.

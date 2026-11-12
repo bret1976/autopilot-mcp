@@ -114,7 +114,7 @@ def test_run_autopilot_dry_run_footage_no_gemini(monkeypatch, tmp_path):
             subprocess.run([FFMPEG, "-y", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size={size}:rate=30",
                             "-t", "2", "-pix_fmt", "yuv420p", str(path)], check=True)
         return str(v), str(l), concept, {"media_source": "archival_footage", "topic_key": "artemis1-2022",
-                                         "vertical": {"duration": 8.0}, "landscape": {"duration": 8.0},
+                                         "vertical": {"duration": 45.0}, "landscape": {"duration": 45.0},
                                          "voiceover": {"tts": "kokoro-onnx"}, "footage_sources": []}
 
     monkeypatch.setattr(fm, "produce_footage", fake_produce)

@@ -771,12 +771,13 @@ async def produce_footage_original(record: dict[str, Any], *, niche: str = "") -
         "engine": "footage",
         "model": None,
         "attempt": 1,
-        "format": "single_8s",
+        "format": "footage_short",  # 31-55 s (footage_mode.MIN_SECONDS..MAX_SECONDS), not the 8 s Omni clip
         "cost_usd": 0.0,
         "cost_cap_usd": 0.0,
         "gemini_calls": 0,
         "niche_requested": niche or None,
-        **{k: info.get(k) for k in ("footage_mode", "topic_key", "viral_match", "footage_sources", "music",
+        **{k: info.get(k) for k in ("footage_mode", "topic_key", "topic_source", "topic_reason", "wikipedia",
+                                    "duration_s", "length_rule_s", "viral_match", "footage_sources", "music",
                                     "voiceover", "captions", "cuts_s", "render_seconds")},
         "probe": {"vertical": info.get("vertical"), "landscape": info.get("landscape")},
     }

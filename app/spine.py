@@ -206,6 +206,8 @@ def _footage_topic_for(scan: dict[str, Any]) -> dict[str, Any] | None:
     """Map a scan (or a write_copy title) back to a footage template topic."""
     from app import footage_mode, footage_topics
 
+    if isinstance(scan.get("footage_topic"), dict) and scan["footage_topic"].get("vo"):
+        return scan["footage_topic"]  # a viral-scan subject (not in the library), carried from scan_trends
     key = str(scan.get("footage_topic_key") or "").strip()
     if key in footage_topics.BY_KEY:
         return footage_topics.BY_KEY[key]
@@ -219,32 +221,28 @@ def _footage_topic_for(scan: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def scan_trends_footage(record: dict[str, Any], niche: str = "") -> dict[str, Any]:
-    """Footage engine: keyless last-24h finder (YouTube Data API when YOUTUBE_API_KEY is set, else yt-dlp),
-    ranked by views/hour and matched to the fact-checked footage topic library. No Gemini call."""
+    """Footage engine, viral first: the keyless last-24h finder (YouTube Data API when YOUTUBE_API_KEY is set,
+    else yt-dlp) over a broad 'what's going viral' query set picks the SUBJECT (views/hour); the video is then an
+    original archival-footage edit about that subject. Viral videos are never downloaded. No canned fallback.
+    No Gemini call."""
     from app import footage_mode
 
     queries = None
     if niche.strip():
         queries = [niche.strip()] + [q for q in (os.environ.get("FOOTAGE_VIRAL_QUERIES") or
-                                                 "ww2 footage|history documentary|nasa|rocket launch|titanic|volcano eruption|engineering").split("|") if q.strip()]
+                                                 "|".join(footage_mode.BROAD_VIRAL_QUERIES)).split("|") if q.strip()]
     viral = await asyncio.to_thread(footage_mode.todays_viral, queries)
     items = viral.get("top") or []
     buyer_id = str(record.get("buyer_id") or "")
     recent = originals.recent_topics(buyer_id) if buyer_id else []
-    pick = footage_mode.pick_topic(items, avoid_keys=originals._footage_avoid_keys(recent), recent_topics=recent)
-    topic = pick["topic"]
-    ranked = footage_mode.score_topics(items)
-    return {
-        "title": topic["topic"],
+    log: list[str] = []
+    picks = await asyncio.to_thread(footage_mode.viral_topics, items, avoid_keys=originals._footage_avoid_keys(recent),
+                                    recent_topics=recent, limit=6, log=log)
+    base = {
         "source_url": "",
         "platform": "footage",
-        "why": (f"Matches {len(pick.get('matched') or [])} of today's top uploads (viral score {pick.get('score')})."
-                if pick.get("score") else "No library topic matched today's uploads; next unused topic."),
-        "topic_tags": [t.lstrip("#") for t in topic.get("hashtags", [])],
         "suggested_start": 0,
-        "suggested_duration": 8,
-        "notes": "Real public-domain / CC archival footage. run_autopilot renders 9:16 + 16:9 with no generation API.",
-        "footage_topic_key": topic["key"],
+        "suggested_duration": footage_mode.TARGET_SECONDS,
         "engine": "footage",
         "gemini_calls": 0,
         "viral_source": viral.get("source"),
@@ -252,10 +250,29 @@ async def scan_trends_footage(record: dict[str, Any], niche: str = "") -> dict[s
         "viral_window_hours": viral.get("window_hours"),
         "viral_top": [{k: it.get(k) for k in ("title", "url", "views", "views_per_hour", "age_hours", "channel")}
                       for it in items[:10]],
-        "matched": pick.get("matched", [])[:5],
-        "ranked_topics": [{"key": r["topic"]["key"], "score": r["score"]} for r in ranked[:8]],
+        "ranked_topics": [{"key": p["topic"]["key"], "topic": p["topic"]["topic"], "score": p["score"],
+                           "reason": p["reason"]} for p in picks],
+        "skipped": log[:12],
         "errors": (viral.get("errors") or [])[:5],
         "candidates": [],
+    }
+    if not picks:
+        return {**base, "title": "", "why": "Nothing going viral today can be built from licensed archival footage; "
+                "no canned topic is used, so there is nothing to post.", "topic_tags": [], "matched": [],
+                "notes": "run_autopilot will not post until a viral subject qualifies."}
+    pick = picks[0]
+    topic = pick["topic"]
+    return {
+        **base,
+        "title": topic["topic"],
+        "why": f"Today's viral upload \"{(pick['matched'] or [{}])[0].get('title', '')[:90]}\" "
+               f"({pick['score']:,.0f} views/hour) is about {topic['topic']}.",
+        "topic_tags": [t.lstrip("#") for t in topic.get("hashtags", [])],
+        "notes": ("An original 31-55 s edit of real public-domain / CC archival footage about this subject "
+                  "(9:16 + 16:9, no generation API). The viral video itself is never used."),
+        "footage_topic_key": topic["key"],
+        "footage_topic": topic if topic.get("source") == "viral_scan" else None,
+        "matched": pick.get("matched", [])[:5],
     }
 
 

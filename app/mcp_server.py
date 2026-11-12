@@ -187,6 +187,7 @@ async def setup(
     linkedin_organization_id: str | None = None,
     pinterest_board_id: str | None = None,
     telegram_chat_id: str | None = None,
+    originals_engine: str | None = None,
     reset_api_keys: bool = False,
 ) -> dict[str, Any]:
     """Save the buyer's own keys and brand. Secrets are never echoed back.
@@ -196,6 +197,8 @@ async def setup(
     as the personal profile), pinterest_board_id and telegram_chat_id pin PostProxy placements.
     automation_enabled / require_approval are optional; prefer set_automation.
     reset_api_keys clears Gemini and PostProxy so onboard asks for the three APIs again.
+    originals_engine: "footage" makes videos from real public-domain / CC archival footage with template
+    copy and a local voice (no Gemini key needed, $0); "gemini" uses Gemini Omni with the buyer's own key.
     """
     record = current_record()
     if reset_api_keys:
@@ -224,6 +227,7 @@ async def setup(
         "linkedin_organization_id": linkedin_organization_id,
         "pinterest_board_id": pinterest_board_id,
         "telegram_chat_id": telegram_chat_id,
+        "originals_engine": originals_engine,
     }
     saved = update_setup(record["buyer_id"], fields)
     extra: dict[str, Any] = {}
@@ -465,7 +469,8 @@ async def pick_posting_spot(platform: str, choice: str | None = None) -> dict[st
 
 @mcp.tool(name="scan_trends")
 async def scan_trends_tool(niche: str = "", exclude_urls: list[str] | None = None) -> dict[str, Any]:
-    """Live Gemini scan for a viral original in the buyer's brand niche. No mock. No new clip."""
+    """Live scan for today's viral topic. Gemini engine: grounded scan in the buyer's niche.
+    Footage engine: keyless last-24h YouTube finder ranked by views/hour, matched to the footage topic library."""
     record = current_record()
     gate = blocked(record, need="scan")
     if gate:

@@ -205,3 +205,22 @@ hold it.
 - `dry_run` MCP tool and admin `POST /api/growth-v2/dry-run` build the next post without publishing.
 - Operator pack APIs (`/api/run-guard/*`, `/api/gemini-daily-budget/summary`, `/api/growth-v2/*`) need the admin secret (`X-Admin-Secret`).
 - Kill switches: `GROWTH_V2=0`, `GROWTH_V2_TRANSFORM=0`, `GROWTH_V2_MAX_SLOT_ATTEMPTS`, `GROWTH_V2_MAX_SECONDS`.
+
+## Footage engine (no generation API, no Gemini key)
+
+Ported from bret1976/marketing-automation PR #24 (`VIDEO_ENGINE=footage`).
+
+- **Turn it on per buyer:** call `setup(originals_engine="footage")`, or set `ORIGINALS_ENGINE=footage` to make it the default for buyers who haven't chosen. A buyer's own choice always beats the env default.
+- **Producing a video (`run_autopilot` / scheduled slots):**
+  1. Pick today's viral topic with the keyless last-24h finder (`app/open_viral.py`; it uses the YouTube Data API when `YOUTUBE_API_KEY` is set, otherwise yt-dlp), ranked by views per hour.
+  2. Match it to the fact-checked template library (`app/footage_topics.py`).
+  3. Pull real public-domain or CC footage from NASA, Wikimedia Commons, or the curated Internet Archive collections.
+  4. Beat-cut it to CC0 music, add a local Kokoro voiceover and captions, and render an 8-second clip in 9:16 (full-bleed pan-and-scan) and 16:9.
+  5. Cost is $0 and nothing calls Gemini.
+- **Tools:** `scan_trends` returns the open-finder results plus the matched topic. `write_copy` returns template copy.
+- **Publishing:** the 16:9 file goes to LinkedIn and X, and the 9:16 file goes everywhere else. `media_source` is `archival_footage`, so no AI-generated flags are set.
+- **Readiness:** footage buyers only need PostProxy; `readiness()` doesn't ask them for a Gemini key.
+- **Kokoro model:** baked into the image at `/opt/kokoro`, with a build-time synthesis check.
+- **Admin checks (`X-Admin-Secret`, nothing is saved or published):**
+  - `POST /api/footage/check {"buyer_id"}` runs `scan_trends` and `write_copy` on the footage engine.
+  - `POST /api/growth-v2/dry-run {"buyer_id", "originals_engine": "footage"}` renders the clip without publishing.

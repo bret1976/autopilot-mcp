@@ -60,10 +60,9 @@ def has_brand(record: dict[str, Any]) -> bool:
 
 
 def has_apis(record: dict[str, Any]) -> bool:
-    return all(
-        str(record.get(key) or "").strip()
-        for key in ("gemini_api_key", "postproxy_api_key", "postproxy_profile_group_id")
-    )
+    from app.config import required_api_keys
+
+    return all(str(record.get(key) or "").strip() for key in required_api_keys(record))
 
 
 def channels_chosen(record: dict[str, Any]) -> bool:

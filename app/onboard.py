@@ -99,7 +99,10 @@ def missing_fields(record: dict[str, Any]) -> list[dict[str, str]]:
                 "why": "TrendPilot brands THIS company from that site. No previous brand is reused.",
             }
         ]
-    return [item for item in _api_prompts() if not str(record.get(item["id"]) or "").strip()]
+    from app.config import required_api_keys
+
+    needed = set(required_api_keys(record))
+    return [item for item in _api_prompts() if item["id"] in needed and not str(record.get(item["id"]) or "").strip()]
 
 
 def readiness(record: dict[str, Any]) -> dict[str, Any]:
@@ -110,7 +113,9 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
     def _has(key: str) -> bool:
         return bool(str(record.get(key) or "").strip())
 
-    can_scan = _has("gemini_api_key")
+    from app.config import footage_engine
+
+    can_scan = _has("gemini_api_key") or footage_engine(record)  # footage mode scans keyless
     can_publish = _has("postproxy_api_key") and _has("postproxy_profile_group_id")
     has_brand = not any(item["id"] == "website_url" for item in missing)
     ready = can_scan and can_publish and has_brand

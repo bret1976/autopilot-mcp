@@ -215,6 +215,19 @@ def _wants_html(request: Request) -> bool:
     return "text/html" in accept or "application/x-www-form-urlencoded" in content
 
 
+def _footage_status() -> dict:
+    try:
+        from app import footage_mode
+        from app.config import originals_engine
+
+        out = footage_mode.status()
+        out["enabled"] = originals_engine() == "footage"  # env default; buyers can override per account
+        out["default_originals_engine"] = originals_engine()
+        return out
+    except Exception as exc:  # noqa: BLE001 — health must never fail on this
+        return {"error": str(exc)[:200]}
+
+
 @app.get("/health")
 async def health():
     root = data_dir()
@@ -241,6 +254,7 @@ async def health():
         },
         "run_guard": run_guard.summary(),
         "order_guard": order_guard.summary(),
+        "footage_mode": _footage_status(),
         "gemini_daily_budget": gemini_budget.summary(),
         "yt_proxy": yt_proxy.summary(),
         "growth_v2": growth_v2.health(),
@@ -868,6 +882,9 @@ async def growth_v2_dry_run(request: Request):
     record = load_buyer(buyer_id) if buyer_id else None
     if not record:
         return JSONResponse({"ok": False, "error": "unknown buyer"}, status_code=404)
+    engine = str(body.get("originals_engine") or "").strip().lower()
+    if engine in {"footage", "gemini"}:
+        record = {**record, "originals_engine": engine}  # this dry run only; the stored account is not changed
     job_id = uuid.uuid4().hex[:12]
     GROWTH_DRY_RUNS[job_id] = {"status": "running", "buyer_id": buyer_id}
 
@@ -888,6 +905,27 @@ async def growth_v2_dry_run(request: Request):
 
     asyncio.create_task(_run())
     return {"ok": True, "job_id": job_id, "status": "running"}
+
+
+@app.post("/api/footage/check")
+async def footage_check(request: Request):
+    """Admin: run the footage engine's scan_trends + write_copy for a buyer (as if originals_engine=footage).
+    Read-only: no Gemini call, no render, no publish, nothing saved to the account."""
+    if not _admin_request_ok(request):
+        return _admin_required()
+    from app.spine import scan_trends, write_copy
+    from app.store import load_buyer
+
+    body = await _read_body(request)
+    buyer_id = clean_buyer_id(str(body.get("buyer_id") or ""))
+    record = load_buyer(buyer_id) if buyer_id else None
+    if not record:
+        return JSONResponse({"ok": False, "error": "unknown buyer"}, status_code=404)
+    record = {**record, "originals_engine": "footage"}
+    scan = await scan_trends(record, niche=str(body.get("niche") or ""))
+    copy = await write_copy(record, {"title": scan.get("title") or ""})
+    return {"ok": True, "scan": scan, "copy": {k: copy.get(k) for k in (
+        "title", "topic", "footage_topic_key", "media_source", "youtube_title", "captions", "gemini_calls")}}
 
 
 @app.get("/api/growth-v2/dry-run/{job_id}")

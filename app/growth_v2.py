@@ -361,7 +361,7 @@ def steering_text(buyer_id: str, brand: str) -> str:
 def origin_of(media_source: Any) -> str:
     """'original' (AI-generated or the buyer's own brand clip) or 'repost' (someone else's clip)."""
     src = str(media_source or "").lower()
-    if src in {"ai_generated", "brand_fallback"}:
+    if src in {"ai_generated", "brand_fallback", "archival_footage"}:
         return "original"
     if not src:
         return "unknown"
@@ -557,7 +557,7 @@ def classify_media(buyer_id: str, media: dict[str, Any]) -> str:
     if media.get("transformed"):
         return "transformed"
     src = str(media.get("media_source") or "")
-    if src in {"brand_fallback", "ai_generated"}:
+    if src in {"brand_fallback", "ai_generated", "archival_footage"}:
         return "original"
     if src == "growth_v2_transformed":
         return "transformed"

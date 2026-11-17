@@ -20,6 +20,7 @@ from app.config import (
     CTA_ACCESS,
     CTA_LABEL,
     CTA_PRICE,
+    OWNER_BUYER_ID,
     PRICE_LABEL,
     PRICE_USD,
     PRODUCT_NAME,
@@ -276,17 +277,29 @@ def _content_team_health() -> dict:
         return {"pack": "content-team-v1", "error": str(exc)[:200], "publish_blocked": True}
 
 
+def _content_team_token() -> str:
+    return (os.environ.get("CONTENT_TEAM_TOKEN") or os.environ.get("CONTENT_TEAM_INGEST_TOKEN") or "").strip()
+
+
 def _content_team_buyer(request: Request) -> str:
-    """MCP buyer token or admin secret required for Content Team HTTP routes."""
-    from app.config import admin_secret
+    """MCP buyer token, Content Team token, or admin secret for Content Team HTTP routes.
+
+    X-Content-Team-Token matching CONTENT_TEAM_TOKEN targets Bret's 6Frame
+    buyer (OWNER_BUYER_ID), not test licenses. Admin secret still maps to
+    the separate "admin" store.
+    """
     from app.tokens import extract_token, verify_token
 
     parsed = verify_token(extract_token(request))
     if parsed:
         return parsed.buyer_id
-    expected = admin_secret()
-    header = (request.headers.get("x-admin-secret") or request.headers.get("x-content-team-token") or "").strip()
-    if expected and header and header == expected:
+    header = (request.headers.get("x-content-team-token") or "").strip()
+    expected_ct = _content_team_token()
+    if expected_ct and header and hmac.compare_digest(header, expected_ct):
+        return OWNER_BUYER_ID
+    expected_admin = admin_secret()
+    admin_header = (request.headers.get("x-admin-secret") or request.headers.get("x-content-team-token") or "").strip()
+    if expected_admin and admin_header and hmac.compare_digest(admin_header, expected_admin):
         return "admin"
     from fastapi import HTTPException
     raise HTTPException(status_code=401, detail="Authentication required.")
@@ -387,6 +400,28 @@ async def content_team_http_ingest(request: Request, body: ContentTeamIngestBody
         added = ct_store.append_ingest(body.kind, payload)
         total = len(ct_store.load_ingest(body.kind))
     return {"ok": True, "kind": body.kind, "added": len(added), "total": total, "published": False, "sent": False}
+
+
+@app.get("/api/content-team/ingest/{kind}")
+async def content_team_http_get_ingest(kind: str, request: Request):
+    from app.content_team_bind import use_buyer_state
+    from content_team import store as ct_store
+    from fastapi import HTTPException
+
+    buyer_id = _content_team_buyer(request)
+    if kind not in ct_store.INGEST_KINDS:
+        raise HTTPException(status_code=400, detail=f"unknown kind {kind}")
+    with use_buyer_state(buyer_id):
+        items = ct_store.load_ingest(kind)
+    return {
+        "ok": True,
+        "kind": kind,
+        "items": items,
+        "total": len(items),
+        "buyer_id": buyer_id,
+        "published": False,
+        "sent": False,
+    }
 
 
 @app.get("/api/content-team/report")

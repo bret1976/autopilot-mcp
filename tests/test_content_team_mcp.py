@@ -97,3 +97,49 @@ def test_content_team_run_and_review_are_draft_only(tmp_path, monkeypatch) -> No
         assert ingested.json()["added"] == 1
         assert ingested.json()["published"] is False
         assert ingested.json()["sent"] is False
+
+
+def test_content_team_token_ingests_into_owner_buyer_not_test_licenses(tmp_path, monkeypatch) -> None:
+    from app.config import OWNER_BUYER_ID
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CONTENT_TEAM_TOKEN", "routine-token-for-tests")
+    monkeypatch.setenv("DISABLE_BACKGROUND_SCHEDULER", "true")
+    headers = {"X-Content-Team-Token": "routine-token-for-tests"}
+    item = {
+        "id": "x-trend-1",
+        "url": "https://x.com/studio/status/1",
+        "author": "studio",
+        "author_name": "Studio",
+        "text": "A last-24h AI filmmaking trend.",
+        "created_at": "2026-11-17T16:00:00Z",
+        "source": "grok_routine",
+    }
+    with TestClient(app) as client:
+        denied = client.post("/api/content-team/ingest", json={"kind": "trending", "items": [item]})
+        assert denied.status_code == 401
+        posted = client.post(
+            "/api/content-team/ingest",
+            headers=headers,
+            json={"kind": "trending", "source": "grok_routine", "items": [item]},
+        )
+        assert posted.status_code == 200
+        body = posted.json()
+        assert body["ok"] is True
+        assert body["added"] == 1
+        assert body["published"] is False
+        assert body["sent"] is False
+        listed = client.get("/api/content-team/ingest/trending", headers=headers)
+        assert listed.status_code == 200
+        payload = listed.json()
+        assert payload["ok"] is True
+        assert payload["buyer_id"] == OWNER_BUYER_ID
+        assert payload["total"] >= 1
+        assert payload["published"] is False
+        assert payload["sent"] is False
+        assert any(it.get("id") == "x-trend-1" for it in payload["items"])
+    stored = tmp_path / "buyers" / OWNER_BUYER_ID / "content_team" / "ingest" / "trending.json"
+    assert stored.is_file()
+    # A test license must not receive the routine ingest.
+    test_dir = tmp_path / "buyers" / "test-deploy-verify-20261117" / "content_team" / "ingest" / "trending.json"
+    assert not test_dir.exists()

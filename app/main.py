@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
+from pydantic import BaseModel
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -251,6 +252,7 @@ async def health():
             "order_guard": order_guard.PACK,
             "gemini_daily_budget": gemini_budget.PACK,
             "growth_metrics_fix": growth_v2.METRICS_FIX_PACK,
+            "content_team": _content_team_health().get("pack", "content-team-v1"),
         },
         "run_guard": run_guard.summary(),
         "order_guard": order_guard.summary(),
@@ -259,7 +261,146 @@ async def health():
         "yt_proxy": yt_proxy.summary(),
         "growth_v2": growth_v2.health(),
         "growth_metrics_fix": growth_v2.metrics_fix_summary(),
+        "content_team": _content_team_health(),
     }
+
+
+
+def _content_team_health() -> dict:
+    try:
+        from content_team import health as ct_health
+        payload = ct_health()
+        payload["publish_blocked"] = True
+        return payload
+    except Exception as exc:  # noqa: BLE001 — health must never fail on this
+        return {"pack": "content-team-v1", "error": str(exc)[:200], "publish_blocked": True}
+
+
+def _content_team_buyer(request: Request) -> str:
+    """MCP buyer token or admin secret required for Content Team HTTP routes."""
+    from app.config import admin_secret
+    from app.tokens import extract_token, verify_token
+
+    parsed = verify_token(extract_token(request))
+    if parsed:
+        return parsed.buyer_id
+    expected = admin_secret()
+    header = (request.headers.get("x-admin-secret") or request.headers.get("x-content-team-token") or "").strip()
+    if expected and header and header == expected:
+        return "admin"
+    from fastapi import HTTPException
+    raise HTTPException(status_code=401, detail="Authentication required.")
+
+
+@app.get("/api/content-team/health")
+async def content_team_http_health(request: Request):
+    from app.content_team_bind import use_buyer_state
+    from content_team import health as ct_health
+
+    buyer_id = _content_team_buyer(request)
+    with use_buyer_state(buyer_id):
+        payload = ct_health()
+    payload["ok"] = True
+    payload["publish_blocked"] = True
+    payload["published"] = False
+    payload["sent"] = False
+    return payload
+
+
+class ContentTeamRunBody(BaseModel):
+    brief: str | None = None
+    idea: str | None = None
+    subject: str | None = None
+    text: str | None = None
+    url: str | None = None
+
+
+@app.post("/api/content-team/run/{role}")
+async def content_team_http_run(role: str, request: Request, body: ContentTeamRunBody | None = None):
+    from app.content_team_bind import use_buyer_state
+    from content_team.roles import RUNNERS, run_role
+    from fastapi import HTTPException
+
+    buyer_id = _content_team_buyer(request)
+    if role not in RUNNERS:
+        raise HTTPException(status_code=404, detail=f"unknown role {role}")
+    payload = (body.model_dump(exclude_none=True) if body else {})
+    with use_buyer_state(buyer_id):
+        try:
+            report = run_role(role, **payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "report": report, "published": False, "sent": False, "publish_blocked": True}
+
+
+@app.get("/api/content-team/drafts")
+async def content_team_http_drafts(request: Request, status: str | None = None):
+    from app.content_team_bind import use_buyer_state
+    from content_team import store as ct_store
+
+    buyer_id = _content_team_buyer(request)
+    with use_buyer_state(buyer_id):
+        items = ct_store.load_drafts()
+    if status:
+        items = [d for d in items if d.get("status") == status.upper()]
+    return {"ok": True, "items": items, "total": len(items), "published": False, "sent": False}
+
+
+class ContentTeamReviewBody(BaseModel):
+    status: str
+
+
+@app.post("/api/content-team/drafts/{draft_id}/review")
+async def content_team_http_review(draft_id: str, request: Request, body: ContentTeamReviewBody):
+    from app.content_team_bind import use_buyer_state
+    from content_team import store as ct_store
+    from fastapi import HTTPException
+
+    buyer_id = _content_team_buyer(request)
+    with use_buyer_state(buyer_id):
+        try:
+            found = ct_store.set_draft_status(draft_id, body.status)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not found:
+        raise HTTPException(status_code=404, detail="draft not found")
+    return {"ok": True, "draft": found, "published": False, "sent": False}
+
+
+class ContentTeamIngestBody(BaseModel):
+    kind: str
+    items: list[dict] | None = None
+    source: str = "http"
+
+
+@app.post("/api/content-team/ingest")
+async def content_team_http_ingest(request: Request, body: ContentTeamIngestBody):
+    from app.content_team_bind import use_buyer_state
+    from content_team import store as ct_store
+    from fastapi import HTTPException
+
+    buyer_id = _content_team_buyer(request)
+    if body.kind not in ct_store.INGEST_KINDS:
+        raise HTTPException(status_code=400, detail=f"kind must be one of {list(ct_store.INGEST_KINDS)}")
+    payload = [dict(it, source=(it.get("source") or body.source)) for it in (body.items or [])]
+    with use_buyer_state(buyer_id):
+        added = ct_store.append_ingest(body.kind, payload)
+        total = len(ct_store.load_ingest(body.kind))
+    return {"ok": True, "kind": body.kind, "added": len(added), "total": total, "published": False, "sent": False}
+
+
+@app.get("/api/content-team/report")
+async def content_team_http_report(request: Request, role: str | None = None):
+    from app.content_team_bind import use_buyer_state
+    from content_team import store as ct_store
+
+    buyer_id = _content_team_buyer(request)
+    with use_buyer_state(buyer_id):
+        if role:
+            report = ct_store.load_report(role)
+            return {"ok": True, "role": role, "report": report, "empty": not bool(report), "published": False, "sent": False}
+        reports = {name: ct_store.load_report(name) for name in ct_store.ROLES}
+    return {"ok": True, "reports": reports, "published": False, "sent": False}
 
 
 @app.post("/api/yt-proxy/register")

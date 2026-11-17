@@ -953,3 +953,116 @@ async def last_run() -> dict[str, Any]:
         "automation": automation_public(record),
         "config": public_config(record),
     }
+
+
+# ---------------------------------------------------------------------------
+# Content Team (additive). Existing TrendPilot tools above are unchanged.
+# Draft-only: review never publishes or sends.
+# ---------------------------------------------------------------------------
+
+from app.content_team_bind import use_buyer_state
+from content_team import health as content_team_health_payload
+from content_team.roles import RUNNERS, run_role
+from content_team import store as content_team_store
+
+
+@mcp.tool(name="content_team_health")
+async def content_team_health() -> dict[str, Any]:
+    """Content Team status. Draft-only; publish is blocked. Does not post."""
+    record = current_record()
+    with use_buyer_state(record["buyer_id"]):
+        payload = content_team_health_payload()
+    payload["ok"] = True
+    payload["publish_blocked"] = True
+    payload["published"] = False
+    payload["sent"] = False
+    return payload
+
+
+@mcp.tool(name="content_team_run")
+async def content_team_run(
+    role: str,
+    brief: str = "",
+    idea: str = "",
+    subject: str = "",
+    text: str = "",
+    url: str = "",
+) -> dict[str, Any]:
+    """Run one Content Team role and store a draft for review. Never publishes or sends."""
+    record = current_record()
+    if role not in RUNNERS:
+        return {"ok": False, "error": f"unknown role {role}", "roles": sorted(RUNNERS), "published": False, "sent": False}
+    kwargs: dict[str, Any] = {}
+    if brief:
+        kwargs["brief"] = brief
+    if idea:
+        kwargs["idea"] = idea
+    if subject:
+        kwargs["subject"] = subject
+    if text:
+        kwargs["text"] = text
+    if url:
+        kwargs["url"] = url
+    with use_buyer_state(record["buyer_id"]):
+        try:
+            report = run_role(role, **kwargs)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "published": False, "sent": False}
+    return {
+        "ok": True,
+        "report": report,
+        "published": False,
+        "sent": False,
+        "publish_blocked": True,
+    }
+
+
+@mcp.tool(name="content_team_drafts")
+async def content_team_drafts(status: str = "") -> dict[str, Any]:
+    """List Content Team drafts for this buyer. Nothing is posted."""
+    record = current_record()
+    with use_buyer_state(record["buyer_id"]):
+        items = content_team_store.load_drafts()
+    if status:
+        wanted = status.upper()
+        items = [d for d in items if d.get("status") == wanted]
+    return {"ok": True, "items": items, "total": len(items), "published": False, "sent": False}
+
+
+@mcp.tool(name="content_team_review")
+async def content_team_review(draft_id: str, status: str) -> dict[str, Any]:
+    """Mark a Content Team draft approved or rejected. Never publishes or sends a reply."""
+    record = current_record()
+    with use_buyer_state(record["buyer_id"]):
+        try:
+            found = content_team_store.set_draft_status(draft_id, status)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "published": False, "sent": False}
+    if not found:
+        return {"ok": False, "error": "draft not found", "published": False, "sent": False}
+    return {"ok": True, "draft": found, "published": False, "sent": False}
+
+
+@mcp.tool(name="content_team_ingest")
+async def content_team_ingest(kind: str, items: list[dict[str, Any]] | None = None, source: str = "mcp") -> dict[str, Any]:
+    """Ingest posts for Content Team research (trending, competitor, bookmark, qt_candidate, reply_target)."""
+    record = current_record()
+    if kind not in content_team_store.INGEST_KINDS:
+        return {"ok": False, "error": f"kind must be one of {list(content_team_store.INGEST_KINDS)}", "published": False, "sent": False}
+    payload = [dict(it, source=(it.get("source") or source)) for it in (items or [])]
+    with use_buyer_state(record["buyer_id"]):
+        added = content_team_store.append_ingest(kind, payload)
+        total = len(content_team_store.load_ingest(kind))
+    return {"ok": True, "kind": kind, "added": len(added), "total": total, "published": False, "sent": False}
+
+
+@mcp.tool(name="content_team_report")
+async def content_team_report(role: str = "") -> dict[str, Any]:
+    """Fetch the latest Content Team report for one role, or all roles if role is empty."""
+    record = current_record()
+    with use_buyer_state(record["buyer_id"]):
+        if role:
+            report = content_team_store.load_report(role)
+            return {"ok": True, "role": role, "report": report, "empty": not bool(report), "published": False, "sent": False}
+        reports = {name: content_team_store.load_report(name) for name in content_team_store.ROLES}
+    return {"ok": True, "reports": reports, "published": False, "sent": False}

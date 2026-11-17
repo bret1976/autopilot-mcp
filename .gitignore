@@ -14,3 +14,8 @@ public/media/
 tmp/
 .DS_Store
 *.log
+
+# runtime Content Team state written when CONTENT_TEAM_STATE_DIR is unset
+content_team/ingest/
+content_team/drafts/
+content_team/reports/

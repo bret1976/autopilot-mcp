@@ -469,8 +469,8 @@ async def pick_posting_spot(platform: str, choice: str | None = None) -> dict[st
 
 @mcp.tool(name="scan_trends")
 async def scan_trends_tool(niche: str = "", exclude_urls: list[str] | None = None) -> dict[str, Any]:
-    """Live scan for today's viral topic. Gemini engine: grounded scan in the buyer's niche.
-    Footage engine: keyless last-24h YouTube finder ranked by views/hour, matched to the footage topic library."""
+    """Live scan for today's viral topic. last30days-skill keyless last-24h scan (no Gemini).
+    Footage engine: last-24h finder ranked by velocity, matched to the footage topic library."""
     record = current_record()
     gate = blocked(record, need="scan")
     if gate:

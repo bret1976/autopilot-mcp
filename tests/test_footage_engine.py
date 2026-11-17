@@ -65,7 +65,8 @@ def test_footage_buyer_needs_no_gemini_key():
     assert has_apis(RECORD)
     assert blocked(RECORD, need="scan") is None
     gem = {k: v for k, v in RECORD.items() if k != "originals_engine"}
-    assert not readiness(gem)["can_scan"] and "gemini_api_key" in readiness(gem)["missing"]
+    assert readiness(gem)["can_scan"]  # last30days scan is keyless
+    assert "gemini_api_key" in required_api_keys(gem)
 
 
 def test_setup_saves_only_valid_engine():

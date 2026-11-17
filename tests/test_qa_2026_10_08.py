@@ -82,11 +82,11 @@ def test_same_session_is_still_idempotent_across_status_thanks_and_webhook(monke
     assert polled["order_id"] == thanks["order_id"] == polled2["order_id"]
 
 
-def test_fresh_license_cannot_start_keyless_jobs() -> None:
+def test_fresh_license_can_scan_without_gemini_but_cannot_publish() -> None:
     record = {"buyer_id": "qa-fresh", "brand_name": "", "website_url": "", "brand_voice": ""}
     report = readiness(record)
-    assert report["can_scan"] is False and report["can_publish"] is False
-    assert blocked(record, need="scan") is not None
+    assert report["can_scan"] is True and report["can_publish"] is False
+    assert blocked(record, need="scan") is None
     assert blocked(record, need="publish") is not None
     assert report["missing"] == ["website_url"]  # walkthrough still asks for the site first
 

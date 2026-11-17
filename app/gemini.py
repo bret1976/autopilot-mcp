@@ -32,6 +32,30 @@ async def generate_json(
     return parse_json_object(text)
 
 
+def cloudflare_writer_ready() -> bool:
+    """True when the shared free Workers AI client can be used for ungrounded writing."""
+    try:
+        from content_team.llm import _provider_ready
+        return bool(_provider_ready("cloudflare"))
+    except Exception:
+        return False
+
+
+async def _cloudflare_generate_text(prompt: str) -> str:
+    import asyncio
+
+    def _run() -> str:
+        from content_team import llm
+        llm._assert_under_daily_cap()
+        text = llm._openai_complete("cloudflare", prompt, "")
+        if not (text or "").strip():
+            raise RuntimeError("Cloudflare Workers AI returned an empty response")
+        llm.record_call("cloudflare")
+        return text
+
+    return await asyncio.to_thread(_run)
+
+
 async def generate_text(
     api_key: str,
     prompt: str,
@@ -41,6 +65,12 @@ async def generate_text(
     timeout: float = GEMINI_TIMEOUT_SECONDS,
     budget_scope: str | None = None,
 ) -> str:
+    # Ungrounded writing (captions, hooks) uses Cloudflare when configured so
+    # production does not depend on a buyer Gemini key. Grounded scans keep the
+    # existing Gemini path because Workers AI has no Google Search grounding.
+    # Output still goes through parse_json_object / the same return type.
+    if not grounded and cloudflare_writer_ready():
+        return await _cloudflare_generate_text(prompt)
     if not api_key:
         raise RuntimeError("Gemini API key is not configured. Call setup first.")
     errors: list[str] = []

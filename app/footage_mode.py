@@ -241,13 +241,29 @@ def pick_topic(viral_items: List[dict], avoid_keys: Optional[set] = None, recent
 
 
 def todays_viral(queries: Optional[List[str]] = None) -> dict:
-    """Keyless (yt-dlp) last-24h finder from PR #23 over a broad 'what's going viral today' query set
-    (FOOTAGE_VIRAL_QUERIES overrides). Only titles/view counts are read; no viral video is downloaded."""
-    from app import open_viral
+    """Last-24h finder: last30days-skill (keyless HN + Trends) plus the existing open YouTube probe.
+    Only titles/view counts are read; no viral video is downloaded. No Gemini."""
+    from app import last30days_scan, open_viral
+    found = last30days_scan.scan()
+    viral = last30days_scan.to_viral(found)
     qs = queries or [q.strip() for q in (os.environ.get("FOOTAGE_VIRAL_QUERIES") or "|".join(BROAD_VIRAL_QUERIES)).split("|")
                      if q.strip()]
     os.environ.setdefault("VIRAL_OPEN_PROBE_LIMIT", os.environ.get("FOOTAGE_VIRAL_PROBE_LIMIT", "80"))
-    return open_viral.find_viral(queries=qs, subreddits=[], top_n=60, niche=False, max_seconds=3600)
+    try:
+        yt = open_viral.find_viral(queries=qs, subreddits=[], top_n=60, niche=False, max_seconds=3600)
+    except Exception as exc:  # noqa: BLE001
+        yt = {"top": [], "sources": {}, "errors": [str(exc)], "window_hours": 24}
+    top = list(viral.get("top") or []) + list(yt.get("top") or [])
+    sources = {**(viral.get("sources") or {}), **(yt.get("sources") or {})}
+    errors = list(viral.get("errors") or []) + list(yt.get("errors") or [])
+    return {
+        "source": "last30days+open",
+        "window_hours": 24,
+        "sources": sources,
+        "errors": errors,
+        "top": top,
+        "gemini_calls": 0,
+    }
 
 
 # --------------------------------------------------------------------------- 1b. viral-first topic selection

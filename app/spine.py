@@ -40,6 +40,7 @@ from app.proof import build_proof_dashboard
 from app import growth_v2
 from app import originals
 from app import run_guard
+from app import last30days_scan
 from app import yt_proxy
 from app.store import public_config, set_last_run, update_setup
 
@@ -298,74 +299,37 @@ async def scan_trends(
         }
     if originals.footage_enabled(record):
         return await scan_trends_footage(record, niche=niche)
-    voice = record.get("brand_voice") or DEFAULT_BRAND_VOICE
-    brand = record.get("brand_name") or "the buyer's brand"
-    website = record.get("website_url") or ""
-    default_niche = f"content that fits {brand}" + (f" ({website})" if website else "")
-    prompt = SCAN_PROMPT.format(
-        niche=niche or default_niche,
-        voice=voice,
-        brand=brand,
-        website=website,
-        failed=failed,
-        source_rules=SOURCE_RULES_WITH_PROXY if yt_proxy.configured() else SOURCE_RULES_DATACENTER,
-        youtube_rule=(
-            "\nYouTube is bot-walled right now: return NO YouTube links at all."
-            if avoid_youtube
-            else ""
-        ),
-        steering=growth_v2.steering_text(str(record.get("buyer_id") or ""), brand),
-    )
-    grounded: list[dict[str, str]] = []
-    try:
-        raw, sources = await generate_json_with_sources(
-            record.get("gemini_api_key") or "",
-            prompt,
-            models=GEMINI_SCAN_MODELS,
-            budget_scope=str(record.get("buyer_id") or "anon"),
-        )
-        try:
-            grounded = await resolve_grounded_urls(sources)
-        except Exception:  # noqa: BLE001 — grounding links are a bonus, never fatal
-            grounded = []
-    except Exception:  # noqa: BLE001 — fall back to the plain grounded call
-        raw = await generate_json(
-            record.get("gemini_api_key") or "",
-            prompt,
-            grounded=True,
-            models=GEMINI_SCAN_MODELS,
-            budget_scope=str(record.get("buyer_id") or "anon"),
-        )
-    candidates = _normalize_candidates(raw)
-    known = {c["source_url"] for c in candidates}
-    for item in grounded:
-        if item["source_url"] in known:
-            continue
-        known.add(item["source_url"])
-        candidates.append(
-            {
-                "title": item.get("title") or (candidates[0].get("title") if candidates else "") or brand,
-                "source_url": item["source_url"],
-                "platform": item.get("platform") or "",
-                "why": (candidates[0].get("why") if candidates else "") or "",
-                "topic_tags": (candidates[0].get("topic_tags") if candidates else []) or [],
-                "suggested_start": 0,
-                "suggested_duration": 45,
-                "notes": "Real post link recovered from Google Search grounding.",
-                "grounded": True,
-            }
-        )
-    skip = set(exclude_urls or [])
-    candidates = order_candidates([c for c in candidates if c["source_url"] not in skip], avoid_youtube=avoid_youtube)
+    # last30days-skill (keyless, last 24h) replaces Gemini Google-Search grounding.
+    found = await asyncio.to_thread(last30days_scan.scan, niche or "")
+    candidates = last30days_scan.to_scan_candidates(found, exclude_urls=exclude_urls)
+    candidates = order_candidates(candidates, avoid_youtube=avoid_youtube)
     candidates, dropped = growth_v2.filter_candidates(str(record.get("buyer_id") or ""), candidates)
     top = candidates[0] if candidates else {}
     result: dict[str, Any] = {key: top.get(key) for key in SCAN_FIELDS}
     if not result.get("topic_tags"):
         result["topic_tags"] = []
+    if not result.get("title"):
+        fallback = last30days_scan.to_scan_result(found, exclude_urls=exclude_urls)
+        result = {key: fallback.get(key) for key in SCAN_FIELDS}
     result["candidates"] = candidates
-    result["grounded_urls"] = [item["source_url"] for item in grounded]
+    result["engine"] = last30days_scan.ENGINE
+    result["gemini_calls"] = 0
+    result["viral_window_hours"] = found.get("window_hours")
+    result["viral_sources"] = found.get("sources")
+    result["grounded_urls"] = [c["source_url"] for c in candidates]
     if dropped:
         result["dropped_sources"] = dropped
+    if found.get("errors"):
+        result["errors"] = found["errors"]
+    try:
+        from app.content_team_bind import use_buyer_state
+        from content_team import store as ct_store
+
+        buyer_id = str(record.get("buyer_id") or "anon")
+        with use_buyer_state(buyer_id):
+            ct_store.append_ingest("trending", last30days_scan.to_ingest(found))
+    except Exception:  # noqa: BLE001 — ingest is additive, never fails the scan
+        logging.getLogger(__name__).warning("content team trending ingest skipped", exc_info=True)
     return result
 
 

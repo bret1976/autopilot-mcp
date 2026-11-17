@@ -115,7 +115,8 @@ def readiness(record: dict[str, Any]) -> dict[str, Any]:
 
     from app.config import footage_engine
 
-    can_scan = _has("gemini_api_key") or footage_engine(record)  # footage mode scans keyless
+    # last30days-skill is a keyless last-24h scan; Gemini is no longer required to scan.
+    can_scan = True
     can_publish = _has("postproxy_api_key") and _has("postproxy_profile_group_id")
     has_brand = not any(item["id"] == "website_url" for item in missing)
     ready = can_scan and can_publish and has_brand
